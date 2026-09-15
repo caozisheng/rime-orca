@@ -1,9 +1,6 @@
-import { z } from 'zod'
-import { ORCHESTRATION_WORKER_READ_SOURCES } from '../../../../../../shared/orchestration-worker-output'
 import { contextOnlyAbandonWarning } from '../../../../orchestration/context-only-dispatch-release'
 import { OrchestrationError } from '../../../../orchestration/orchestration-error'
-import { defineMethod, type RpcMethod } from '../../../core'
-import { OptionalFiniteNumber, requiredString } from '../../../schemas'
+import { defineMethod } from '../../../core'
 import {
   exposeDispatchContext,
   exposeObservation,
@@ -14,18 +11,18 @@ import {
   showContextOnlyWorker
 } from './worker-observation'
 import { readArchivedWorkerOutput } from './worker-archive-read'
+import { readStructuredWorkerOutput } from '../../orchestration-structured-worker-lifecycle'
+import { releaseStructuredWorkerSession } from '../../orchestration-structured-worker-session'
 import { readExactWorkerOutput } from './worker-output'
 import { exposeWorkerTerminalResource } from './worker-release-completion'
 import { readFederatedWorkerOutput } from '../federation/federated-worker-read'
 import { showFederatedWorker } from '../federation/federated-worker-show'
-const WorkerDispatchParams = z.object({ dispatch: requiredString('Missing --dispatch') })
-const WorkerReadParams = WorkerDispatchParams.extend({
-  cursor: z.union([z.number().int().nonnegative(), z.string().min(1).max(2_048)]).optional(),
-  limit: OptionalFiniteNumber,
-  source: z.enum(ORCHESTRATION_WORKER_READ_SOURCES).optional()
-})
+import {
+  WorkerDispatchParams,
+  WorkerReadParams
+} from '../../../../../../shared/rpc-contract/orchestration-worker-control-params'
 
-export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
+export const ORCHESTRATION_WORKER_CONTROL_METHODS = [
   defineMethod({
     name: 'orchestration.workerShow',
     params: WorkerDispatchParams,
@@ -146,6 +143,23 @@ export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
           `Worker Dispatch ${params.dispatch} no longer resolves to its exact process.`
         )
       }
+      const structured = readStructuredWorkerOutput({
+        db,
+        dispatchId: params.dispatch,
+        workerState: worker?.state ?? 'unsupervised',
+        // Reused, never re-derived: being able to read the journal proves the host is installed,
+        // not that the provider child is alive.
+        liveness:
+          observation.status === 'live' || observation.status === 'exited'
+            ? observation.status
+            : 'unverifiable',
+        source: params.source,
+        cursor: params.cursor,
+        limit: params.limit
+      })
+      if (structured) {
+        return structured
+      }
       const output = await readExactWorkerOutput({
         runtime,
         dispatchId: params.dispatch,
@@ -186,6 +200,10 @@ export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
       const abandoned = runtime.getOrchestrationDb().abandonWorkerDispatch(params.dispatch)
       if (abandoned.disposition === 'context_only') {
         if (!abandoned.alreadySettled) {
+          // Abandon settles the Dispatch, so it owes the same hold release stop and release do.
+          // A surviving hold pins the provider child for the life of the app and makes host crash
+          // recovery respawn a worker nobody is waiting on.
+          releaseStructuredWorkerSession(params.dispatch, runtime)
           runtime.notifyMessageArrived(`dispatch:${params.dispatch}`, 'status')
         }
         return {
@@ -200,6 +218,7 @@ export const ORCHESTRATION_WORKER_CONTROL_METHODS: RpcMethod[] = [
       }
       const worker = abandoned.worker
       if (abandoned.disposition === 'abandoned') {
+        releaseStructuredWorkerSession(params.dispatch, runtime)
         runtime.notifyMessageArrived(`dispatch:${params.dispatch}`, 'status')
       }
       return {
