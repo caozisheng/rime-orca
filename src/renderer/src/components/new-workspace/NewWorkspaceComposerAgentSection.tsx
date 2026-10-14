@@ -11,30 +11,40 @@ type NewWorkspaceComposerAgentSectionProps = Pick<
   NewWorkspaceComposerCardProps,
   | 'quickAgent'
   | 'onQuickAgentChange'
+  | 'quickSetupOnly'
+  | 'onQuickSetupOnlySelect'
   | 'onOpenAgentSettings'
   | 'createDisabled'
   | 'onCreate'
   | 'advancedOpen'
   | 'onToggleAdvanced'
 > & {
+  advancedLocked?: boolean
   visibleQuickAgents: React.ComponentProps<typeof AgentCombobox>['agents']
   defaultTuiAgent: React.ComponentProps<typeof AgentCombobox>['defaultAgent']
   handleSetDefaultAgent: (
     next: Parameters<NonNullable<React.ComponentProps<typeof AgentCombobox>['onSetDefault']>>[0]
   ) => void
+  setupOnlyIsDefault: boolean
+  handleSetSetupOnlyDefault: () => void
 }
 
 export function NewWorkspaceComposerAgentSection({
   quickAgent,
   onQuickAgentChange,
+  quickSetupOnly = false,
+  onQuickSetupOnlySelect,
   onOpenAgentSettings,
   createDisabled,
   onCreate,
   advancedOpen,
+  advancedLocked = false,
   onToggleAdvanced,
   visibleQuickAgents,
   defaultTuiAgent,
-  handleSetDefaultAgent
+  handleSetDefaultAgent,
+  setupOnlyIsDefault,
+  handleSetSetupOnlyDefault
 }: NewWorkspaceComposerAgentSectionProps): React.JSX.Element {
   return (
     <>
@@ -69,9 +79,20 @@ export function NewWorkspaceComposerAgentSection({
           agents={visibleQuickAgents}
           value={quickAgent}
           onValueChange={onQuickAgentChange}
+          allowBlankTerminal
           onOpenManageAgents={onOpenAgentSettings}
           defaultAgent={defaultTuiAgent}
           onSetDefault={handleSetDefaultAgent}
+          setupOnly={
+            onQuickSetupOnlySelect
+              ? {
+                  selected: quickSetupOnly,
+                  isDefault: setupOnlyIsDefault,
+                  onSelect: onQuickSetupOnlySelect,
+                  onSetDefault: handleSetSetupOnlyDefault
+                }
+              : undefined
+          }
           allowNarrowTrigger
           triggerClassName="h-9 w-full min-w-0 border-input text-sm focus:border-ring focus:ring-[3px] focus:ring-ring/50"
           onTriggerEnter={createDisabled ? undefined : onCreate}
@@ -84,6 +105,8 @@ export function NewWorkspaceComposerAgentSection({
           variant="ghost"
           size="sm"
           onClick={onToggleAdvanced}
+          disabled={advancedLocked}
+          aria-expanded={advancedOpen}
           className="-ml-2 text-xs focus-visible:ring-inset"
         >
           {translate('auto.components.NewWorkspaceComposerCard.f0470c7383', 'Advanced')}

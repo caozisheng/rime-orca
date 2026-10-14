@@ -2,10 +2,17 @@ import { ipcRenderer } from 'electron'
 import type { TerminalPaneSplitSource } from '../../shared/feature-education-telemetry'
 import type { TerminalTabCreateReply } from '../../shared/terminal-reveal-identity'
 import type {
+  AgentLaunchTabPublishReply,
+  AgentLaunchTabViewerRule,
+  AgentLaunchTabPublishRequest
+} from '../../shared/agent-launch-tab-publication'
+import type { AgentLaunchPaneVerdictEvent } from '../../shared/agent-launch-pane-verdict'
+import type {
   AgentProviderSessionMetadata,
   SleepingAgentLaunchConfig
 } from '../../shared/agent-session-resume'
 import type { TuiAgent } from '../../shared/tui-agent'
+import type { RuntimeNavigationTarget } from '../../shared/runtime-navigation'
 import type {
   RuntimeMobileSessionTabMove,
   RuntimeTerminalCreateRequestPayload,
@@ -32,6 +39,7 @@ export const uiTerminalAndSessionTabsApi = {
       focus?: boolean
       presentation?: RuntimeTerminalPresentation
       surfaceOwner?: false
+      agentLaunchViewer?: AgentLaunchTabViewerRule
       tabId?: string
       leafId?: string
       splitFromLeafId?: string
@@ -58,6 +66,7 @@ export const uiTerminalAndSessionTabsApi = {
         focus?: boolean
         presentation?: RuntimeTerminalPresentation
         surfaceOwner?: false
+        agentLaunchViewer?: AgentLaunchTabViewerRule
         tabId?: string
         leafId?: string
         splitFromLeafId?: string
@@ -91,6 +100,25 @@ export const uiTerminalAndSessionTabsApi = {
   replyTerminalCreate: (reply: TerminalTabCreateReply): void => {
     ipcRenderer.send('terminal:tabCreateReply', reply)
   },
+  onPublishAgentLaunchTab: (
+    callback: (data: AgentLaunchTabPublishRequest) => void
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: AgentLaunchTabPublishRequest) =>
+      callback(data)
+    ipcRenderer.on('ui:publishAgentLaunchTab', listener)
+    return () => ipcRenderer.removeListener('ui:publishAgentLaunchTab', listener)
+  },
+  replyAgentLaunchTabPublish: (reply: AgentLaunchTabPublishReply): void => {
+    ipcRenderer.send('agentLaunch:tabPublishReply', reply)
+  },
+  onAgentLaunchPaneVerdict: (
+    callback: (data: AgentLaunchPaneVerdictEvent) => void
+  ): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: AgentLaunchPaneVerdictEvent) =>
+      callback(data)
+    ipcRenderer.on('ui:agentLaunchPaneVerdict', listener)
+    return () => ipcRenderer.removeListener('ui:agentLaunchPaneVerdict', listener)
+  },
   onSplitTerminal: (
     callback: (data: {
       tabId: string
@@ -120,11 +148,11 @@ export const uiTerminalAndSessionTabsApi = {
     return () => ipcRenderer.removeListener('ui:splitTerminal', listener)
   },
   onRenameTerminal: (
-    callback: (data: { tabId: string; title: string | null }) => void
+    callback: (data: { tabId: string; title: string | null; recordInteraction?: false }) => void
   ): (() => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
-      data: { tabId: string; title: string | null }
+      data: { tabId: string; title: string | null; recordInteraction?: false }
     ) => callback(data)
     ipcRenderer.on('ui:renameTerminal', listener)
     return () => ipcRenderer.removeListener('ui:renameTerminal', listener)
@@ -154,11 +182,16 @@ export const uiTerminalAndSessionTabsApi = {
     return () => ipcRenderer.removeListener('ui:focusTerminal', listener)
   },
   onFocusEditorTab: (
-    callback: (data: { tabId: string; worktreeId: string }) => void
+    callback: (data: {
+      tabId: string
+      worktreeId: string
+      /** The user clicked a notification, so revealing the tab is navigation and not a courtesy. */
+      userInitiated?: boolean
+    }) => void
   ): (() => void) => {
     const listener = (
       _event: Electron.IpcRendererEvent,
-      data: { tabId: string; worktreeId: string }
+      data: { tabId: string; worktreeId: string; userInitiated?: boolean }
     ) => callback(data)
     ipcRenderer.on('ui:focusEditorTab', listener)
     return () => ipcRenderer.removeListener('ui:focusEditorTab', listener)
@@ -197,7 +230,8 @@ export const uiTerminalAndSessionTabsApi = {
       worktreeId: string
       filePath: string
       relativePath: string
-      runtimeEnvironmentId?: string
+      runtimeEnvironmentId?: string | null
+      navigation?: RuntimeNavigationTarget
     }) => void
   ): (() => void) => {
     const listener = (
@@ -206,7 +240,8 @@ export const uiTerminalAndSessionTabsApi = {
         worktreeId: string
         filePath: string
         relativePath: string
-        runtimeEnvironmentId?: string
+        runtimeEnvironmentId?: string | null
+        navigation?: RuntimeNavigationTarget
       }
     ) => callback(data)
     ipcRenderer.on('ui:openFileFromMobile', listener)

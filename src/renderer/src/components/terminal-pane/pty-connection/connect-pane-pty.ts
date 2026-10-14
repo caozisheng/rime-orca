@@ -1,3 +1,4 @@
+import { installSpawnDeferredSleep } from './spawn-deferred-sleep'
 import type { PaneManager, ManagedPane } from '@/lib/pane-manager/pane-manager'
 import { useAppStore } from '@/store'
 import { TerminalKittyKeyboardModeTracker } from '../../../../../shared/terminal-kitty-keyboard-mode-tracker'
@@ -29,7 +30,7 @@ import { installTerminalKeydownFit } from './terminal-keydown-fit'
 import { installPtyExitHibernate } from './pty-exit-hibernate'
 import { installTitleSpawnBell } from './title-spawn-bell'
 import { installAgentTaskCompleteNotify } from './agent-task-complete-notify'
-import { installDirectSshRetryStatus } from './direct-ssh-retry-status'
+import { installPaneHostCapabilityFlags } from './pane-host-capability-flags'
 import { installPtyInputRecovery } from './pty-input-recovery'
 import { installPtyInputForward } from './pty-input-forward'
 import { installPtyResizeGeometry } from './pty-resize-geometry'
@@ -94,7 +95,6 @@ export function connectPanePty(
   session.terminalBellNotificationTimer = null
   session.pendingTerminalBellNotification = false
   session.reattachIdleAgentCursorResetTimer = null
-  session.alternateScreenBackgroundRepaintTimer = null
   session.shiftEnterReconfirmTimer = null
   session.synchronizedForegroundOutputActive = false
   // Why: carries up to one marker-length-1 of trailing bytes so a ConPTY-split DEC 2026 marker is still detected (#8754).
@@ -103,6 +103,7 @@ export function connectPanePty(
   // foreground frame opened, so a split end marker that lands after the redraw
   // window still drains on the fast path instead of the 1s coalesce fallback.
   session.synchronizedForegroundFrameInteractive = false
+  session.synchronizedForegroundInteractivePresentPending = false
   session.suppressStructuralReplayPtyResize = false
   // Why: hidden-delivery gate sync is wired up alongside the deferred PTY
   // output plumbing inside the connect frame; lifecycle hooks (visibility
@@ -114,10 +115,6 @@ export function connectPanePty(
   session.remoteOutputGatedPtyId = null
   session.remoteOutputFactConsumerPtyId = null
   session.suppressViewportClaimTerminalResize = false
-  // Why: idle callbacks are registered before the deferred PTY output plumbing
-  // exists. Start with the shared scheduler, then switch to the PTY writer
-  // below so hidden-tab resets keep backlog-recovery callbacks and byte order.
-  session.idleAgentTerminalModeReset = RESET_TERMINAL_CURSOR_STYLE
   session.suppressNativeWindowsIdleCodexFocusReports = false
   session.setFocusReportSuppressionForAgentCompletion = (
     title: string | undefined,
@@ -127,11 +124,14 @@ export function connectPanePty(
     session.suppressNativeWindowsIdleCodexFocusReports =
       agentType && agentType !== 'unknown' ? agentType === 'codex' : titleAgentType === 'codex'
   }
+  // Why: idle callbacks are registered before the deferred PTY output plumbing
+  // exists. Start with the shared scheduler, then switch to the PTY writer
+  // so hidden-tab resets keep backlog-recovery callbacks and byte order.
   session.queueAgentIdleTerminalModeReset = (): void => {
     if (session.disposed) {
       return
     }
-    writeTerminalOutput(session.pane.terminal, session.idleAgentTerminalModeReset, {
+    writeTerminalOutput(session.pane.terminal, RESET_TERMINAL_CURSOR_STYLE, {
       foreground: shouldWritePtyOutputForeground(session.deps.isVisibleRef.current)
     })
   }
@@ -149,20 +149,29 @@ export function connectPanePty(
   // mutation does not propagate back.
   session.paneStartup = session.deps.startup ?? null
   session.deps.startup = undefined
+  // Why the session holds it until a spawn request carries it: the pane already dropped every other
+  // reference to this PTY, so the stop is owed until main takes it or dispose kills it.
+  session.pendingReplacedPtyId = session.deps.replacesPtyId ?? null
+  session.deps.replacesPtyId = undefined
+  session.claimPendingReplacedPtyId = (): string | null => {
+    const ptyId: string | null = session.pendingReplacedPtyId
+    session.pendingReplacedPtyId = null
+    return ptyId
+  }
 
   // Why: paneKey crosses PTY env, hook IPC, retained rows, and reload/replay.
   // Use the stable layout leaf UUID, not the renderer-local numeric pane id.
   session.cacheKey = makePaneKey(session.deps.tabId, session.pane.leafId)
-  // Why: mirrors the kitty keyboard flags the pane's application negotiates.
-  // Fed only from application output (live PTY bytes + daemon replay
-  // payloads), never from renderer-generated resets, so it reflects what the
-  // application expects even after defensive renderer-side kitty wipes.
+  // Why: xterm exposes no kitty read, so this mirror tracks the flags xterm's
+  // encoder applies; see TerminalKittyKeyboardModeTracker for its feeds.
   session.kittyKeyboardModes = (() => {
     const existing = session.deps.paneKittyKeyboardModesRef.current.get(session.pane.id)
     if (existing) {
       return existing
     }
-    const created = new TerminalKittyKeyboardModeTracker()
+    const created = new TerminalKittyKeyboardModeTracker({
+      kittyKeyboard: session.pane.terminal.options.vtExtensions?.kittyKeyboard === true
+    })
     session.deps.paneKittyKeyboardModesRef.current.set(session.pane.id, created)
     return created
   })()
@@ -171,9 +180,10 @@ export function connectPanePty(
   installInterruptInputIntent(session)
   installTerminalKeydownFit(session)
   installPtyExitHibernate(session)
+  installSpawnDeferredSleep(session)
   installTitleSpawnBell(session)
   installAgentTaskCompleteNotify(session)
-  installDirectSshRetryStatus(session)
+  installPaneHostCapabilityFlags(session)
   installPtyInputRecovery(session)
   // Async reattach/exit callbacks can outlive the PaneManager that created
   // them. Keep their layout writes keyed by the durable leaf identity and

@@ -3,11 +3,11 @@ import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import {
   getExplicitRuntimeEnvironmentIdForWorktree,
   getExecutionHostIdForWorktree,
-  getRuntimeEnvironmentIdForWorktree,
-  getRuntimeSessionMirrorEnvironmentIds,
-  getSettingsForWorktreeRuntimeOwner,
-  type WorktreeRuntimeOwnerState
+  getKnownExecutionHostIdForWorktree,
+  getRuntimeEnvironmentIdForWorktree
 } from './worktree-runtime-owner'
+import { getRuntimeSessionMirrorEnvironmentIds } from './runtime-session-mirror-owners'
+import type { WorktreeRuntimeOwnerState } from './worktree-runtime-owner-state'
 
 const state: WorktreeRuntimeOwnerState = {
   settings: { activeRuntimeEnvironmentId: 'focused-env' },
@@ -35,30 +35,34 @@ const state: WorktreeRuntimeOwnerState = {
   ]
 }
 
-describe('getSettingsForWorktreeRuntimeOwner', () => {
+describe('getRuntimeEnvironmentIdForWorktree', () => {
   it('routes to the runtime owner of the worktree', () => {
-    expect(getSettingsForWorktreeRuntimeOwner(state, 'runtime-repo::wt-b')).toEqual({
-      activeRuntimeEnvironmentId: 'owner-env'
-    })
+    expect(getRuntimeEnvironmentIdForWorktree(state, 'runtime-repo::wt-b')).toBe('owner-env')
   })
 
   it('keeps explicit-local worktrees local even while a runtime is focused', () => {
-    expect(getSettingsForWorktreeRuntimeOwner(state, 'local-repo::wt-a')).toEqual({
-      activeRuntimeEnvironmentId: null
-    })
+    expect(getRuntimeEnvironmentIdForWorktree(state, 'local-repo::wt-a')).toBeNull()
   })
 
   it('keeps the synthetic floating workspace local while a runtime is focused', () => {
-    expect(getSettingsForWorktreeRuntimeOwner(state, FLOATING_TERMINAL_WORKTREE_ID)).toEqual({
-      activeRuntimeEnvironmentId: null
-    })
-    expect(getExecutionHostIdForWorktree(state, FLOATING_TERMINAL_WORKTREE_ID)).toBe('local')
+    const floatingState: WorktreeRuntimeOwnerState = {
+      ...state,
+      activeWorktreeId: FLOATING_TERMINAL_WORKTREE_ID,
+      activeWorkspaceExecutionHostId: 'runtime:focused-env'
+    }
+    expect(
+      getRuntimeEnvironmentIdForWorktree(floatingState, FLOATING_TERMINAL_WORKTREE_ID)
+    ).toBeNull()
+    expect(getKnownExecutionHostIdForWorktree(floatingState, FLOATING_TERMINAL_WORKTREE_ID)).toBe(
+      'local'
+    )
+    expect(getExecutionHostIdForWorktree(floatingState, FLOATING_TERMINAL_WORKTREE_ID)).toBe(
+      'local'
+    )
   })
 
   it('routes folder workspaces to their project group runtime owner', () => {
-    expect(getSettingsForWorktreeRuntimeOwner(state, 'folder:runtime-folder')).toEqual({
-      activeRuntimeEnvironmentId: 'folder-env'
-    })
+    expect(getRuntimeEnvironmentIdForWorktree(state, 'folder:runtime-folder')).toBe('folder-env')
     expect(getExecutionHostIdForWorktree(state, 'folder:runtime-folder')).toBe('runtime:folder-env')
   })
 
@@ -93,11 +97,6 @@ describe('getSettingsForWorktreeRuntimeOwner', () => {
       }
     }
 
-    expect(
-      getSettingsForWorktreeRuntimeOwner(restoredFolderState, 'folder:restored-folder')
-    ).toEqual({
-      activeRuntimeEnvironmentId: 'restored-env'
-    })
     expect(getRuntimeEnvironmentIdForWorktree(restoredFolderState, 'folder:restored-folder')).toBe(
       'restored-env'
     )
@@ -110,9 +109,7 @@ describe('getSettingsForWorktreeRuntimeOwner', () => {
   })
 
   it('keeps explicit-local folder workspaces local even while a runtime is focused', () => {
-    expect(getSettingsForWorktreeRuntimeOwner(state, 'folder:local-folder')).toEqual({
-      activeRuntimeEnvironmentId: null
-    })
+    expect(getRuntimeEnvironmentIdForWorktree(state, 'folder:local-folder')).toBeNull()
     expect(getExecutionHostIdForWorktree(state, 'folder:local-folder')).toBe('local')
 
     const restoredOwnerState: WorktreeRuntimeOwnerState = {
@@ -134,9 +131,9 @@ describe('getSettingsForWorktreeRuntimeOwner', () => {
       ]
     }
 
-    expect(getSettingsForWorktreeRuntimeOwner(folderConnectionState, 'folder:folder-ssh')).toEqual({
-      activeRuntimeEnvironmentId: null
-    })
+    expect(
+      getRuntimeEnvironmentIdForWorktree(folderConnectionState, 'folder:folder-ssh')
+    ).toBeNull()
     expect(getExecutionHostIdForWorktree(folderConnectionState, 'folder:folder-ssh')).toBe(
       'ssh:folder-remote'
     )
@@ -151,10 +148,8 @@ describe('getSettingsForWorktreeRuntimeOwner', () => {
     }
 
     expect(
-      getSettingsForWorktreeRuntimeOwner(staleFolderConnectionState, 'folder:runtime-folder')
-    ).toEqual({
-      activeRuntimeEnvironmentId: 'folder-env'
-    })
+      getRuntimeEnvironmentIdForWorktree(staleFolderConnectionState, 'folder:runtime-folder')
+    ).toBe('folder-env')
     expect(getExecutionHostIdForWorktree(staleFolderConnectionState, 'folder:runtime-folder')).toBe(
       'runtime:folder-env'
     )
@@ -608,5 +603,47 @@ describe('active workspace host selection', () => {
     expect(getExecutionHostIdForWorktree(pairedHubState, PAIRED_HUB_WORKTREE_ID)).toBe(
       'ssh:hub-private-target'
     )
+  })
+})
+
+describe('getKnownExecutionHostIdForWorktree', () => {
+  const emptyCatalog: WorktreeRuntimeOwnerState = { repos: [], worktreesByRepo: {} }
+
+  it('reports silence, not local, for a git worktree with no repo row', () => {
+    expect(getKnownExecutionHostIdForWorktree(emptyCatalog, 'missing-repo::wt')).toBeNull()
+    // The routing form keeps substituting the default in the same state.
+    expect(getExecutionHostIdForWorktree(emptyCatalog, 'missing-repo::wt')).toBe('local')
+  })
+
+  it('reports silence for a folder workspace with no folder-workspace row', () => {
+    expect(getKnownExecutionHostIdForWorktree(emptyCatalog, 'folder:missing')).toBeNull()
+    expect(getExecutionHostIdForWorktree(emptyCatalog, 'folder:missing')).toBe('local')
+  })
+
+  it.each([
+    ['an ownerless repo row', { repos: [{ id: 'r' }] }, 'r::wt', 'local'],
+    ['an SSH repo row', { repos: [{ id: 'r', connectionId: 'box' }] }, 'r::wt', 'ssh:box'],
+    [
+      'a runtime repo row',
+      { repos: [{ id: 'r', executionHostId: 'runtime:env-1' }] },
+      'r::wt',
+      'runtime:env-1'
+    ],
+    [
+      'a per-worktree host',
+      { worktreesByRepo: { r: [{ id: 'r::wt', repoId: 'r', hostId: 'ssh:box' }] } },
+      'r::wt',
+      'ssh:box'
+    ],
+    [
+      'a folder-workspace row',
+      { folderWorkspaces: [{ id: 'f', projectGroupId: 'g' }] },
+      'folder:f',
+      'local'
+    ],
+    ['the floating workspace', {}, FLOATING_TERMINAL_WORKTREE_ID, 'local']
+  ] as const)('answers positively for %s', (_label, catalog, worktreeId, expected) => {
+    expect(getKnownExecutionHostIdForWorktree(catalog, worktreeId)).toBe(expected)
+    expect(getExecutionHostIdForWorktree(catalog, worktreeId)).toBe(expected)
   })
 })

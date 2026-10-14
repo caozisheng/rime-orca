@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, BackHandler, Pressable, Text, View, useWindowDimensions } from 'react-native'
+import { Pressable, Text, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { useRouter } from 'expo-router'
 import { ChevronLeft, Save } from 'lucide-react-native'
+import { useWorkspaceRouteHandoff } from '../navigation/workspace-route-handoff'
 import { getWorktreeLabel } from '../session/worktree-label'
 import { colors, spacing } from '../theme/mobile-theme'
-import { useForceReconnect, useHostClient } from '../transport/client-context'
+import { useForceReconnect } from '../transport/client-context'
+import { useWorkspaceClient } from '../transport/use-workspace-client'
+import { connectionRetryAction } from '../transport/connection-retry-action'
 import {
   loadMobileFilePreview,
   previewError,
@@ -13,6 +15,7 @@ import {
   type MobileFilePreviewSource,
   type MobileFilePreviewResult
 } from './mobile-file-preview-request'
+import { ConfirmModal } from '../components/ConfirmModal'
 import { MobileFilePreviewBody } from './MobileFilePreviewBody'
 import {
   displayNameFromPreviewPath,
@@ -26,15 +29,17 @@ import {
   shouldKeepDirtyDraftOnPreviewLoadResult
 } from './mobile-file-preview-editability'
 import { filePreviewStyles as styles } from './mobile-file-preview-styles'
+import { useMobileFilePreviewBack } from './use-mobile-file-preview-back'
 
 type Props = {
   route: MobileFilePreviewRouteState
 }
 
 export function MobileFilePreviewScreen({ route }: Props) {
-  const router = useRouter()
+  // Why: every workspace screen uses the handoff so it shares the route chunk; else the bundle overruns its asset budget.
+  const router = useWorkspaceRouteHandoff()
   const previewParams = route.ok ? route.params : null
-  const { client, state: connState } = useHostClient(previewParams?.hostId)
+  const { client, state: connState } = useWorkspaceClient(previewParams?.hostId)
   const forceReconnect = useForceReconnect()
   const [preview, setPreview] = useState<MobileFilePreviewResult>(() =>
     route.ok ? { status: 'loading', message: 'Loading preview...' } : previewError(route.message)
@@ -119,7 +124,7 @@ export function MobileFilePreviewScreen({ route }: Props) {
         return
       }
       const loadedContent =
-        result.status === 'ready' && result.kind !== 'image'
+        result.status === 'ready' && result.kind !== 'image' && result.kind !== 'media'
           ? result.content
           : result.status === 'empty'
             ? ''
@@ -154,21 +159,19 @@ export function MobileFilePreviewScreen({ route }: Props) {
     void loadPreview()
   }, [loadPreview])
 
-  const retry = useCallback(async () => {
-    if (!previewParams) {
-      void loadPreview()
-      return
-    }
-    if (
-      preview.status === 'waiting' ||
-      (preview.status === 'error' && preview.reconnect) ||
-      connState !== 'connected'
-    ) {
-      await forceReconnect(previewParams.hostId)
-      return
-    }
-    void loadPreview()
-  }, [connState, forceReconnect, loadPreview, preview, previewParams])
+  const retry = useMemo(
+    () =>
+      connectionRetryAction({
+        hostId: previewParams?.hostId,
+        needsReconnect:
+          preview.status === 'waiting' ||
+          (preview.status === 'error' && preview.reconnect) ||
+          connState !== 'connected',
+        forceReconnect,
+        reload: () => void loadPreview()
+      }),
+    [connState, forceReconnect, loadPreview, preview, previewParams]
+  )
 
   const displayPath =
     previewParams?.source === 'terminalArtifact'
@@ -219,22 +222,11 @@ export function MobileFilePreviewScreen({ route }: Props) {
     }
   }, [canSaveArtifact, client, draftContent, previewSource, savedContent, saving])
 
-  const requestBack = useCallback(() => {
-    if (!hasUnsavedTerminalArtifactDraft) {
-      router.back()
-      return true
-    }
-    Alert.alert('Discard changes?', 'Unsaved edits will be lost.', [
-      { text: 'Stay', style: 'cancel' },
-      { text: 'Discard', style: 'destructive', onPress: () => router.back() }
-    ])
-    return true
-  }, [hasUnsavedTerminalArtifactDraft, router])
-
-  useEffect(() => {
-    const subscription = BackHandler.addEventListener('hardwareBackPress', requestBack)
-    return () => subscription.remove()
-  }, [requestBack])
+  const leave = useCallback(() => router.back(), [router])
+  const { confirmingDiscard, requestBack, stay, discard } = useMobileFilePreviewBack({
+    hasUnsavedDraft: hasUnsavedTerminalArtifactDraft,
+    leave
+  })
 
   return (
     <View style={styles.container}>
@@ -244,6 +236,7 @@ export function MobileFilePreviewScreen({ route }: Props) {
             style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
             onPress={requestBack}
             hitSlop={8}
+            accessibilityRole="button"
             accessibilityLabel="Back to files"
           >
             <ChevronLeft size={22} color={colors.textSecondary} strokeWidth={2.2} />
@@ -270,6 +263,7 @@ export function MobileFilePreviewScreen({ route }: Props) {
       </SafeAreaView>
       <MobileFilePreviewBody
         preview={preview}
+        client={client}
         relativePath={displayPath}
         title={title || 'File'}
         editable={isEditableTerminalArtifact}
@@ -283,6 +277,16 @@ export function MobileFilePreviewScreen({ route }: Props) {
           setPreview({ status: 'error', message: 'Unable to load preview', reconnect: false })
         }
         onRetry={retry}
+      />
+      <ConfirmModal
+        visible={confirmingDiscard}
+        title="Discard changes?"
+        message="Unsaved edits will be lost."
+        confirmLabel="Discard"
+        cancelLabel="Stay"
+        destructive
+        onConfirm={discard}
+        onCancel={stay}
       />
     </View>
   )

@@ -3,11 +3,9 @@ import { toast } from 'sonner'
 import type { TerminalTab } from '../../../../shared/terminal-tab-types'
 import { useAppStore } from '../../store'
 import { focusTerminalTabSurface } from '../../lib/focus-terminal-tab-surface'
-import {
-  createWebRuntimeSessionBrowserTab,
-  createWebRuntimeSessionTerminal,
-  isWebRuntimeSessionActive
-} from '../../runtime/web-runtime-session'
+import { createWebRuntimeSessionBrowserTab } from '../../runtime/web-runtime-browser-creation'
+import { createWebRuntimeSessionTerminal } from '../../runtime/web-runtime-terminal-creation'
+import { isWebRuntimeSessionActive } from '../../runtime/web-runtime-session-environment'
 import { openTabBarEntry, type TabCreateEntryArgs } from '../tab-bar/tab-create-entry-action'
 import { openMobileEmulatorTab } from '@/lib/open-mobile-emulator-tab'
 import { ensureSimulatorTab, getSimulatorTabForWorktree } from '@/lib/ensure-simulator-tab'
@@ -60,7 +58,7 @@ export function useTabGroupCreationCommands({
       const terminal = createTab(worktreeId, newGroupId)
       recordTerminalTabGroupSplit(terminal)
       setActiveTab(terminal.id)
-      setActiveTabType('terminal')
+      setActiveTabType('terminal', worktreeId)
     },
     [
       createEmptySplitGroup,
@@ -99,7 +97,7 @@ export function useTabGroupCreationCommands({
     openEntry: async (args: TabCreateEntryArgs) => {
       await openTabBarEntry(args)
     },
-    duplicateBrowserTab: (browserTabId: string) => {
+    duplicateBrowserTab: (browserTabId: string, sourceUnifiedTabId: string) => {
       void (async () => {
         const state = useAppStore.getState()
         const tabs = state.browserTabsByWorktree[worktreeId] ?? []
@@ -123,17 +121,19 @@ export function useTabGroupCreationCommands({
             environmentId: runtimeEnvironmentId,
             url: source.url,
             profileId: source.sessionProfileId,
-            targetGroupId: groupId
+            targetGroupId: groupId,
+            clientAfterTabId: sourceUnifiedTabId
           })
           if (created) {
             return
           }
           throw new Error('The paired runtime could not duplicate the managed browser tab.')
         }
+        // Why no targetGroupId: a source-following duplicate joins the source's live group.
         createBrowserTab(worktreeId, source.url, {
           ...buildDuplicatedBrowserTabOptions(source),
           ...(runtimeEnvironmentId ? { browserRuntimeEnvironmentId: null } : {}),
-          targetGroupId: groupId
+          afterTabId: sourceUnifiedTabId
         })
       })().catch((error) => {
         toast.error(error instanceof Error ? error.message : String(error))
@@ -161,7 +161,7 @@ export function useTabGroupCreationCommands({
         }
         const terminal = createTab(worktreeId, groupId, shellOverride)
         setActiveTab(terminal.id)
-        setActiveTabType('terminal')
+        setActiveTabType('terminal', worktreeId)
         focusTerminalTabSurface(terminal.id)
       })()
     }

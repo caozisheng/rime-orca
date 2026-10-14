@@ -40,6 +40,7 @@ export async function discoverOpenCodeSessions(args: {
   dbPaths: readonly string[]
   limitPerAgent: number
   issues: AiVaultScanIssue[]
+  signal?: AbortSignal
 }): Promise<SessionFileDiscovery> {
   const [fileDiscovery, sqliteCandidates] = await Promise.all([
     discoverFiles({
@@ -47,14 +48,16 @@ export async function discoverOpenCodeSessions(args: {
       limit: args.limitPerAgent,
       agent: 'opencode',
       issues: args.issues,
-      extensions: ['.json']
+      extensions: ['.json'],
+      signal: args.signal
     }),
     // Why (#8864): the SQLite list leg runs on a worker thread; only this leg
     // moves off the main thread, the filesystem scan stays inline.
     listOpenCodeSqliteSessionsViaWorker({
       dbPaths: args.dbPaths,
       limit: args.limitPerAgent,
-      issues: args.issues
+      issues: args.issues,
+      signal: args.signal
     })
   ])
 

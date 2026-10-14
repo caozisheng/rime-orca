@@ -12,6 +12,11 @@ declare module 'monaco-editor/esm/vs/basic-languages/python/python.js' {
   export const language: languages.IMonarchLanguage
 }
 
+declare module 'monaco-editor/esm/vs/basic-languages/markdown/markdown.js' {
+  export const conf: languages.LanguageConfiguration
+  export const language: languages.IMonarchLanguage
+}
+
 // Monaco ships these contributions without public type declarations. We only
 // touch the paste-override surface, so declare the minimal shape we use.
 declare module 'monaco-editor/esm/vs/editor/contrib/clipboard/browser/clipboard.js' {
@@ -39,6 +44,17 @@ declare module 'monaco-editor/esm/vs/editor/browser/controller/editContext/clipb
   }
 }
 
+// The same class the public `monaco.Uri` re-exports, reachable without loading the editor bundle.
+declare module 'monaco-editor/esm/vs/base/common/uri.js' {
+  export class URI {
+    static file(path: string): URI
+    static parse(value: string): URI
+    readonly scheme: string
+    readonly fsPath: string
+    toString(skipEncoding?: boolean): string
+  }
+}
+
 declare module 'monaco-editor/esm/vs/base/common/async.js' {
   export class Delayer<T = unknown> {
     constructor(defaultDelay: number)
@@ -60,7 +76,47 @@ declare module 'monaco-editor/esm/vs/base/common/lifecycle.js' {
   }
 }
 
+// Only the gutter-disposal patch test constructs this directly (config/patches/monaco-editor@0.55.1.patch).
+declare module 'monaco-editor/esm/vs/editor/browser/widget/diffEditor/utils/editorGutter.js' {
+  type GutterEvent = (listener: () => void) => { dispose(): void }
+  type GutterRange = {
+    startLineNumber: number
+    endLineNumberExclusive: number
+    intersect(other: unknown): unknown
+  }
+  export class EditorGutter {
+    constructor(
+      editor: {
+        onDidScrollChange: GutterEvent
+        onDidChangeModel: GutterEvent
+        onDidChangeViewZones: GutterEvent
+        onDidContentSizeChange: GutterEvent
+        getScrollTop(): number
+        hasModel(): boolean
+        getModel(): { getLineCount(): number }
+        getVisibleRanges(): { startLineNumber: number; endLineNumber: number }[]
+        getTopForLineNumber(line: number, includeViewZones?: boolean): number
+        getBottomForLineNumber(line: number, includeViewZones?: boolean): number
+      },
+      domNode: HTMLElement,
+      itemProvider: {
+        getIntersectingGutterItems(
+          range: unknown,
+          reader: unknown
+        ): { id: string; range: GutterRange }[]
+        createView(
+          item: unknown,
+          target: HTMLElement
+        ): { layout(...args: unknown[]): void; dispose(): void }
+      }
+    )
+    dispose(): void
+  }
+}
+
 declare global {
+  /** Full commit the build was made from, stamped by the renderer build. */
+  const ORCA_BUILD_COMMIT: string
   var MonacoEnvironment:
     | {
         getWorker(workerId: string, label: string): Worker
@@ -73,6 +129,8 @@ declare global {
     __terminalParkingDebug?: {
       parkDelayMs: number
       parkedTabIds: () => string[]
+      /** A tab's scrollback across both store homes, via the one resolver production reads through. */
+      resolveLeafScrollback: (tabId: string) => Record<string, string> | undefined
       retentionLimit: number | null
       worktreeVerdicts: () => TerminalWorktreeParkingDebugVerdict[]
     }

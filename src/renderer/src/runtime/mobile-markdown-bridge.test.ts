@@ -1,23 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   hashMarkdownContent,
-  MOBILE_MARKDOWN_EDIT_MAX_BYTES
+  MOBILE_MARKDOWN_EDIT_MAX_BYTES,
+  MOBILE_MARKDOWN_READ_MAX_BYTES
 } from '../../../shared/mobile-markdown-document'
 import { attachEditorAutosaveController } from '../components/editor/editor-autosave-controller'
 import { registerPendingEditorFlush } from '../components/editor/editor-pending-flush'
 import { useAppStore } from '../store'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 import { attachMobileMarkdownBridge } from './mobile-markdown-bridge'
 import {
   cleanupMobileMarkdownBridgeHarness,
+  markdownUnifiedTab,
   openMarkdownFile,
   resetEditorState,
   sendRequest,
   setupWindow
 } from './mobile-markdown-bridge-test-harness'
-
-vi.mock('@/components/tab-bar/group-tab-order', () => ({
-  getActiveTabNavOrder: () => [{ type: 'editor', id: '/repo/README.md', tabId: 'tab-md' }]
-}))
 
 vi.mock('@/lib/connection-context', () => ({
   getConnectionIdForFile: () => null
@@ -58,6 +57,122 @@ describe('mobile markdown bridge', () => {
       })
     } finally {
       unregisterFlush()
+      detach()
+    }
+  })
+
+  it('reads a restored floating-workspace tab for a paired client as user-named', async () => {
+    useAppStore.getState().openFile({
+      filePath: '/Users/me/notes.md',
+      relativePath: 'notes.md',
+      worktreeId: FLOATING_TERMINAL_WORKTREE_ID,
+      language: 'markdown',
+      mode: 'edit'
+    })
+    const tabId = useAppStore.getState().openFiles[0]?.id ?? ''
+    const readFile = vi.fn().mockResolvedValue({ content: '# notes', isBinary: false })
+    setupWindow({ readFile })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      const response = await sendRequest({
+        id: 'read-floating',
+        operation: 'read',
+        worktreeId: FLOATING_TERMINAL_WORKTREE_ID,
+        tabId
+      })
+
+      expect(response).toMatchObject({ ok: true, result: { content: '# notes', source: 'file' } })
+      expect(readFile).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: '/Users/me/notes.md', access: { kind: 'user-file' } })
+      )
+    } finally {
+      detach()
+    }
+  })
+
+  it('reads a project tab for a paired client inside its root', async () => {
+    openMarkdownFile()
+    const readFile = vi.fn().mockResolvedValue({ content: 'disk', isBinary: false })
+    setupWindow({ readFile })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      await sendRequest({
+        id: 'read-project',
+        operation: 'read',
+        worktreeId: 'wt-1',
+        tabId: 'tab-md'
+      })
+
+      expect(readFile.mock.calls[0]?.[0]).not.toHaveProperty('access')
+    } finally {
+      detach()
+    }
+  })
+
+  it('reads a markdown tab that sits in a split group the desktop is not focused on', async () => {
+    openMarkdownFile()
+    useAppStore.setState({
+      unifiedTabsByWorktree: {
+        'wt-1': [markdownUnifiedTab('tab-md', '/repo/README.md', 'group-split')]
+      },
+      groupsByWorktree: {
+        'wt-1': [
+          { id: 'group-main', worktreeId: 'wt-1', activeTabId: null, tabOrder: [] },
+          {
+            id: 'group-split',
+            worktreeId: 'wt-1',
+            activeTabId: 'tab-md',
+            tabOrder: ['tab-md']
+          }
+        ]
+      },
+      activeGroupIdByWorktree: { 'wt-1': 'group-main' }
+    })
+    setupWindow({ readFile: vi.fn().mockResolvedValue({ content: '# split', isBinary: false }) })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      const response = await sendRequest({
+        id: 'read-split',
+        operation: 'read',
+        worktreeId: 'wt-1',
+        tabId: 'tab-md'
+      })
+
+      expect(response).toMatchObject({ ok: true, result: { content: '# split' } })
+    } finally {
+      detach()
+    }
+  })
+
+  it('reads the requested tab when the same file is open in two groups', async () => {
+    openMarkdownFile()
+    useAppStore.setState({
+      unifiedTabsByWorktree: {
+        'wt-1': [
+          markdownUnifiedTab('tab-main', '/repo/README.md', 'group-main'),
+          markdownUnifiedTab('tab-split', '/repo/README.md', 'group-split')
+        ]
+      }
+    })
+    setupWindow({ readFile: vi.fn().mockResolvedValue({ content: '# both', isBinary: false }) })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      const response = await sendRequest({
+        id: 'read-duplicate',
+        operation: 'read',
+        worktreeId: 'wt-1',
+        tabId: 'tab-split'
+      })
+
+      expect(response).toMatchObject({
+        ok: true,
+        result: { tabId: 'tab-split', filePath: '/repo/README.md', content: '# both' }
+      })
+    } finally {
       detach()
     }
   })
@@ -153,6 +268,71 @@ describe('mobile markdown bridge', () => {
         result: { editable: false, readOnlyReason: 'file_too_large' }
       })
       expect(readFile).not.toHaveBeenCalled()
+    } finally {
+      detach()
+    }
+  })
+
+  it('reads a markdown file between the edit and read budgets whole, as read-only', async () => {
+    openMarkdownFile()
+    const content = 'a'.repeat(632 * 1024)
+    setupWindow({ readFile: vi.fn().mockResolvedValue({ content, isBinary: false }) })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      const response = await sendRequest({
+        id: 'read-632k',
+        operation: 'read',
+        worktreeId: 'wt-1',
+        tabId: 'tab-md'
+      })
+
+      expect(response).toMatchObject({
+        ok: true,
+        result: { content, editable: false, readOnlyReason: 'file_too_large' }
+      })
+      expect(response).not.toHaveProperty('result.truncated')
+    } finally {
+      detach()
+    }
+  })
+
+  it('truncates a markdown file over the read budget on a UTF-8 boundary', async () => {
+    openMarkdownFile()
+    // The 3-byte euro sign straddles the budget, so the cut must drop it whole.
+    const prefix = 'a'.repeat(MOBILE_MARKDOWN_READ_MAX_BYTES - 1)
+    const content = `${prefix}\u20actail`
+    setupWindow({ readFile: vi.fn().mockResolvedValue({ content, isBinary: false }) })
+    const detach = attachMobileMarkdownBridge()
+
+    try {
+      const response = await sendRequest({
+        id: 'read-over-budget',
+        operation: 'read',
+        worktreeId: 'wt-1',
+        tabId: 'tab-md'
+      })
+
+      expect(response).toMatchObject({
+        ok: true,
+        result: {
+          editable: false,
+          readOnlyReason: 'file_too_large',
+          truncated: true,
+          byteLength: MOBILE_MARKDOWN_READ_MAX_BYTES - 1 + 3 + 4,
+          version: hashMarkdownContent(prefix)
+        }
+      })
+      expect(response).toHaveProperty('result.content', prefix)
+      const save = await sendRequest({
+        id: 'save-truncated',
+        operation: 'save',
+        worktreeId: 'wt-1',
+        tabId: 'tab-md',
+        baseVersion: hashMarkdownContent(prefix),
+        content: prefix
+      })
+      expect(save).toMatchObject({ ok: false, error: 'file_too_large' })
     } finally {
       detach()
     }

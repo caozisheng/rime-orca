@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { connect, createServer } from 'node:net'
 import { buildSshArgs, findSystemSsh, type SystemSshBuildArgsOptions } from './ssh-system-fallback'
+import { stopOrphanedOrcaSshForward } from './system-ssh-orphaned-forward'
 import type { SshTarget } from '../../shared/ssh-types'
 
 export const SYSTEM_SSH_FORWARD_STARTUP_GRACE_MS = 750
@@ -12,6 +13,8 @@ export const SYSTEM_SSH_FORWARD_POST_KILL_TIMEOUT_MS = 500
 
 export type SystemSshPortForwardProcess = {
   process: ChildProcess
+  /** The local port the forward listens on, chosen here when the caller asked for any (0). */
+  localPort: number
   waitForStartup: () => Promise<void>
   close: () => Promise<void>
   dispose: () => void
@@ -30,13 +33,31 @@ export function spawnSystemSshPortForward(
       'No system ssh binary found. Install OpenSSH to use system SSH port forwarding.'
     )
   }
+  const args = buildSystemSshPortForwardArgs(target, localPort, remoteHost, remotePort, options)
+  // Why: port-forward ssh processes are not wired to Orca credential prompts;
+  // system SSH forwards must authenticate via OpenSSH config, agent, or control socket.
+  return spawn(sshPath, args, {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    windowsHide: true
+  })
+}
 
+export function buildSystemSshPortForwardArgs(
+  target: SshTarget,
+  localPort: number,
+  remoteHost: string,
+  remotePort: number,
+  options?: SystemSshBuildArgsOptions
+): string[] {
   const args = buildSshArgs(target, { ...options, suppressOrcaControlMaster: true })
   const destinationIndex = args.lastIndexOf('--')
+  // Why `no`: this second login re-reads the host's ssh_config, so a LocalForward/RemoteForward
+  // there collides with the one Orca's main connection already holds, and `yes` exits on it.
+  // ClearAllForwardings would also drop this -L; stopOnOwnListenFailure checks ours instead.
   const forwardArgs = [
     '-N',
     '-o',
-    'ExitOnForwardFailure=yes',
+    'ExitOnForwardFailure=no',
     '-L',
     `127.0.0.1:${localPort}:${remoteHost}:${remotePort}`
   ]
@@ -47,13 +68,7 @@ export function spawnSystemSshPortForward(
     // destination and optional remote command.
     args.splice(destinationIndex, 0, ...forwardArgs)
   }
-
-  // Why: port-forward ssh processes are not wired to Orca credential prompts;
-  // system SSH forwards must authenticate via OpenSSH config, agent, or control socket.
-  return spawn(sshPath, args, {
-    stdio: ['ignore', 'ignore', 'pipe'],
-    windowsHide: true
-  })
+  return args
 }
 
 export function startSystemSshPortForwardProcess(
@@ -63,11 +78,17 @@ export function startSystemSshPortForwardProcess(
   remotePort: number,
   options?: SystemSshBuildArgsOptions
 ): Promise<SystemSshPortForwardProcess> {
-  return assertLocalForwardPortAvailable(localPort).then(() => {
-    const process = spawnSystemSshPortForward(target, localPort, remoteHost, remotePort, options)
+  const orphanArgs =
+    localPort === 0
+      ? undefined
+      : buildSystemSshPortForwardArgs(target, localPort, remoteHost, remotePort, options)
+  return reserveLocalForwardPort(localPort, orphanArgs).then((boundPort) => {
+    const process = spawnSystemSshPortForward(target, boundPort, remoteHost, remotePort, options)
+    stopOnOwnListenFailure(process, boundPort)
     return {
       process,
-      waitForStartup: () => waitForSystemSshForwardStartup(process, localPort),
+      localPort: boundPort,
+      waitForStartup: () => waitForSystemSshForwardStartup(process, boundPort),
       close: () => waitForSystemSshForwardStop(process),
       dispose: () => {
         try {
@@ -80,23 +101,71 @@ export function startSystemSshPortForwardProcess(
   })
 }
 
-export function assertLocalForwardPortAvailable(localPort: number): Promise<void> {
+/** OpenSSH's report that it could not listen on `localPort`, as opposed to an ssh_config forward. */
+function ownListenFailureLine(stderr: string, localPort: number): string | null {
+  return (
+    new RegExp(`^.*cannot listen to port: ${localPort}(?=\\r?\\n)`, 'm').exec(stderr)?.[0] ?? null
+  )
+}
+
+/** Without ExitOnForwardFailure, ssh outlives a failed bind of our own listener; end it then. */
+function stopOnOwnListenFailure(process: ChildProcess, localPort: number): void {
+  let tail = ''
+  const stop = (): void => {
+    process.stderr?.off('data', onStderr)
+  }
+  const onStderr = (chunk: Buffer): void => {
+    tail = `${tail}${chunk.toString('utf-8')}`.slice(-4096)
+    if (ownListenFailureLine(tail, localPort) === null) {
+      return
+    }
+    stop()
+    try {
+      process.kill('SIGTERM')
+    } catch {
+      /* already exited */
+    }
+  }
+  process.stderr?.on('data', onStderr)
+  process.once('exit', stop)
+}
+
+/**
+ * The port a system SSH forward will listen on. OpenSSH binds `-L 0` to a port it never
+ * reports, so port 0 is resolved to a free one here first.
+ */
+export async function reserveLocalForwardPort(
+  localPort: number,
+  orphanArgs?: readonly string[]
+): Promise<number> {
+  try {
+    return await bindLocalForwardPort(localPort)
+  } catch (error) {
+    // Why: a fixed port (a managed tunnel's) may be held by the same forward an earlier Orca
+    // orphaned; `orphanArgs` is that forward's argv, the only process recovery may stop.
+    const inUse = error instanceof Error && error.cause === 'EADDRINUSE'
+    if (!orphanArgs || !inUse || !(await stopOrphanedOrcaSshForward(localPort, orphanArgs))) {
+      throw error
+    }
+    return bindLocalForwardPort(localPort)
+  }
+}
+
+function bindLocalForwardPort(localPort: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
-    const cleanup = (): void => {
-      server.removeListener('error', onError)
-      server.removeListener('listening', onListening)
-    }
-    const onError = (err: Error): void => {
-      cleanup()
-      reject(new Error(`Local port 127.0.0.1:${localPort} is not available: ${err.message}`))
-    }
-    const onListening = (): void => {
-      cleanup()
-      server.close(() => resolve())
-    }
-    server.once('error', onError)
-    server.once('listening', onListening)
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      reject(
+        new Error(`Local port 127.0.0.1:${localPort} is not available: ${err.message}`, {
+          cause: err.code
+        })
+      )
+    })
+    server.once('listening', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : localPort
+      server.close(() => resolve(port))
+    })
     server.listen(localPort, '127.0.0.1')
   })
 }
@@ -136,7 +205,7 @@ export function waitForSystemSshForwardStartup(
       finish(() => reject(error))
     }
     const onExit = (code: number | null): void => {
-      finish(() => reject(systemSshForwardError(code, stderr)))
+      finish(() => reject(systemSshForwardError(code, stderr, localPort)))
     }
     const scheduleProbe = (): void => {
       probeTimer = setTimeout(() => {
@@ -215,8 +284,14 @@ export function waitForSystemSshForwardStop(process: ChildProcess): Promise<void
   })
 }
 
-export function systemSshForwardError(code: number | null, stderr: string): Error {
-  const detail = bestErrorLine(stderr)
+export function systemSshForwardError(
+  code: number | null,
+  stderr: string,
+  localPort?: number
+): Error {
+  const detail =
+    (localPort === undefined ? null : ownListenFailureLine(stderr, localPort)?.trim()) ??
+    bestErrorLine(stderr)
   return new Error(
     `System SSH port forward failed${code !== null ? ` (exit ${code})` : ''}${
       detail ? `: ${detail}` : ''

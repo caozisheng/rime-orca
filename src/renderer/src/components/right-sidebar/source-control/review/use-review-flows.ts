@@ -16,7 +16,7 @@ export function useSourceControlReviewFlows(foundation: SourceControlPanelFounda
     activeRepoExecutionHostId,
     activeRepoId,
     activeRepoPath,
-    activeRepoSettings,
+    activeRepoTarget,
     activeWorktreeId,
     allocatePullRequestGenerationRequestId,
     branchName,
@@ -82,7 +82,7 @@ export function useSourceControlReviewFlows(foundation: SourceControlPanelFounda
   })
   const pullRequestGeneration = useSourceControlPullRequestGeneration({
     activeRepo,
-    activeRepoSettings,
+    activeRepoTarget,
     activeWorktreeId,
     allocatePullRequestGenerationRequestId,
     branchName,
@@ -100,7 +100,7 @@ export function useSourceControlReviewFlows(foundation: SourceControlPanelFounda
     activePullRequestGenerationSeedRestoreKey:
       pullRequestGeneration.activePullRequestGenerationSeedRestoreKey,
     activeRepo,
-    activeRepoSettings,
+    activeRepoTarget,
     activeWorktreeId,
     branchName,
     effectiveBaseRef,
@@ -154,24 +154,29 @@ export function useSourceControlReviewFlows(foundation: SourceControlPanelFounda
     worktreePath
   })
   const hostedReviewCreationAction = useSourceControlHostedReviewCreation({
+    activePullRequestGenerationKey: pullRequestGeneration.activePullRequestGenerationKey,
     activeRepo,
     activeWorktreeId,
     branchName,
     createHostedReview,
     createPrInFlightRef,
     createStackedHostedReview,
+    handleGeneratePullRequestFields: createReviewComposer.handleGeneratePullRequestFields,
     handlePullRequestCreated: hostedReviewCreated.handlePullRequestCreated,
     hostedReviewCreateCopy,
     hostedReviewCreateProvider,
     hostedReviewCreation,
+    prAiGenerationEnabled: createReviewComposer.prAiGenerationEnabled,
     prBase,
     prBody,
     prDraft,
+    prFieldsAreSeedPlaceholders: createReviewComposer.prFieldsAreSeedPlaceholders,
     prGenerating,
     prTitle,
     resolvedPrCreationDefaults,
     setCreatePrInFlightByWorktree,
     setCreatePrIntentNoticeForWorktree,
+    settings,
     worktreePath
   })
 

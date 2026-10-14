@@ -1,5 +1,6 @@
 import type { useAppStore } from '@/store'
 import type { SleepingAgentSessionRecord } from '../../../shared/agent-session-resume'
+import { agentTurnEndedUncleanly } from '../../../shared/agent-main-agent-verdict'
 import type {
   TerminalLayoutSnapshot,
   TerminalPaneLayoutNode,
@@ -7,6 +8,7 @@ import type {
 } from '../../../shared/terminal-tab-types'
 import { parseLegacyNumericPaneKey, parsePaneKey } from '../../../shared/stable-pane-id'
 import { isWebTerminalSurfaceTabId } from '../../../shared/terminal-surface-id'
+import { isPaneSpawnDeferred } from './pane-spawn-deferral-registry'
 
 type AppStoreState = ReturnType<typeof useAppStore.getState>
 
@@ -17,13 +19,12 @@ export function getProviderSessionClaimKey(record: SleepingAgentSessionRecord): 
     : base
 }
 
-// Why quit is excluded: it is an explicit request to keep resumable work. A
-// live interrupted checkpoint is also active work; interrupted worktree-sleep
-// records retain their existing passive/cleanup semantics.
-export function isPassiveCompletedHibernationEvidence(record: SleepingAgentSessionRecord): boolean {
+// Why live+done counts (#16308): workspace activation must not resume a finished turn's idle anchor.
+// Quit asks to keep work resumable and a live stopped or failed turn is unfinished.
+export function activationTreatsNoteAsFinished(record: SleepingAgentSessionRecord): boolean {
   return (
     record.origin !== 'quit' &&
-    !(record.origin === 'live' && record.interrupted === true) &&
+    !(record.origin === 'live' && agentTurnEndedUncleanly(record)) &&
     record.state === 'done'
   )
 }
@@ -94,7 +95,7 @@ function hasRestorableStablePanePty(
 // the pane that reconnects on activation. Liveness comes from the runtime
 // live-PTY map (ptyIdsByTabId), not the layout's ptyIdsByLeafId snapshot, which
 // persists stale across sleep/restart.
-function stablePaneHasLivePty(
+export function stablePaneHasLivePty(
   tabId: string,
   leafId: string,
   ptyIdsByTabId: Record<string, string[]>,
@@ -125,7 +126,8 @@ function paneWillConnectOnActivation(
   // never cancels it), so any preserved restorable pane cold-restores in place.
   // Gating on the visible tab forked a second live surface onto the same
   // provider session for every non-group-active agent tab. Web-mirror tabs are
-  // the exception: they never mount a local pane, so they cannot own recovery.
+  // the exception: their pane attaches the host PTY instead of cold-restoring
+  // from a note, so they cannot own recovery.
   return !isWebTerminalSurfaceTabId(tabId)
 }
 
@@ -144,7 +146,12 @@ export function recordPaneIsOwnedByPreservedPane(
     if (!tab || !hasMatchingStablePaneLayout(tabId, stable.leafId, state.terminalLayoutsByTabId)) {
       return false
     }
-    if (isPassiveCompletedHibernationEvidence(record)) {
+    if (activationTreatsNoteAsFinished(record)) {
+      return true
+    }
+    // Why: a deferred pane has no PTY yet still resumes this session when opened; a sweep that
+    // launched it elsewhere too would put two `--resume` on one transcript.
+    if (isPaneSpawnDeferred(record.paneKey)) {
       return true
     }
     // Why: a pane with a live PTY owns its running session regardless of which

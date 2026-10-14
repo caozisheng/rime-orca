@@ -6,6 +6,7 @@ import { MobileNativeChatView } from './MobileNativeChatView'
 
 const scrollToEnd = vi.hoisted(() => vi.fn())
 const scrollToOffset = vi.hoisted(() => vi.fn())
+const platform = vi.hoisted(() => ({ OS: 'ios' }))
 
 vi.mock('react-native', async () => {
   const React = await import('react')
@@ -15,6 +16,7 @@ vi.mock('react-native', async () => {
       React.useImperativeHandle(ref, () => ({ scrollToEnd, scrollToOffset }), [])
       return React.createElement('FlatList', props)
     }),
+    Platform: platform,
     Pressable: 'Pressable',
     StyleSheet: { create: (styles: unknown) => styles, hairlineWidth: 1 },
     Text: 'Text',
@@ -47,9 +49,11 @@ vi.mock('lucide-react-native', () => ({
 }))
 
 vi.mock('./MobileNativeChatMessage', () => ({ MobileNativeChatMessage: 'ChatMessage' }))
+vi.mock('./MobileNativeChatLiveLine', () => ({ MobileNativeChatLiveLine: 'LiveStatus' }))
 vi.mock('./MobileNativeChatAsk', () => ({ MobileNativeChatAsk: 'ChatAsk' }))
 vi.mock('./MobileNativeChatPermission', () => ({ MobileNativeChatPermission: 'ChatPermission' }))
 vi.mock('./MobileNativeChatQuestion', () => ({ MobileNativeChatQuestion: 'ChatQuestion' }))
+vi.mock('../components/ActionSheetModal', () => ({ ActionSheetModal: 'ActionSheetModal' }))
 vi.mock('./MobileAgentWorkingIndicator', () => ({
   MobileAgentWorkingIndicator: 'WorkingIndicator'
 }))
@@ -92,6 +96,9 @@ type Overrides = {
   keyboardInset?: number
   hasMore?: boolean
   onLoadEarlier?: () => void
+  status?: Parameters<typeof MobileNativeChatView>[0]['status']
+  error?: string
+  readFailedFinally?: boolean
 }
 
 function assistantTurn(id: string, text: string): NativeChatMessage {
@@ -145,6 +152,55 @@ describe('MobileNativeChatView', () => {
       renderer?.update(chatViewElement(overrides))
     })
   }
+
+  it("holds Stop and says Stopping while this phone's own Stop request is in flight", async () => {
+    await render({
+      structuredActivityUi: true,
+      agentWorking: true,
+      canStop: true,
+      turnIndicator: {
+        thinking: false,
+        activityText: null,
+        stopping: true,
+        stopRequestInFlight: true
+      }
+    })
+    const stop = renderer!.root.find(
+      (node) => node.type === 'Pressable' && node.props.accessibilityLabel === 'Stopping…'
+    )
+    expect(stop.props.disabled).toBe(true)
+  })
+
+  it.each([
+    ['queue', 'Queue a message to run after the stop'],
+    ['send', 'Send a message to run after the stop']
+  ] as const)(
+    'tells the composer a message sent now runs after the stop (%s)',
+    async (afterStop, placeholder) => {
+      await render({
+        structuredActivityUi: true,
+        agentWorking: true,
+        canStop: true,
+        turnIndicator: { thinking: false, activityText: null, stopping: true, afterStop }
+      })
+      const composer = renderer!.root.find((node) => node.type === 'Composer')
+      expect(composer.props.placeholder).toBe(placeholder)
+    }
+  )
+
+  // A Stop the provider took and never answered ends only at a repeat Stop.
+  it('keeps Stop for the repeat that escalates while the host alone says Stopping', async () => {
+    await render({
+      structuredActivityUi: true,
+      agentWorking: true,
+      canStop: true,
+      turnIndicator: { thinking: false, activityText: null, stopping: true }
+    })
+    const stop = renderer!.root.find(
+      (node) => node.type === 'Pressable' && node.props.accessibilityLabel === 'Stop the agent'
+    )
+    expect(stop.props.disabled).toBe(false)
+  })
 
   /** Ids of the rows the list is currently rendering. */
   it('keeps Stop hidden during a structured dispatch until a provider turn can be cancelled', async () => {
@@ -213,6 +269,39 @@ describe('MobileNativeChatView', () => {
     })
   }
 
+  // A read no retry gets past takes the whole pane, even over a transcript already on screen: its
+  // words alone, and nothing that could only be refused again.
+  it('leaves only the words of a read that failed for good, over a loaded transcript', async () => {
+    const loaded = [assistantTurn('m1', 'earlier reply')]
+    const words = 'This chat was saved by a newer Orca. Update Orca to open it.'
+    const shown = (text: string) =>
+      renderer!.root.findAll((node) => node.type === 'Text' && node.props.children === text)
+    const composers = () => renderer!.root.findAll((node) => node.type === 'Composer')
+    const lists = () => renderer!.root.findAll((node) => node.type === 'FlatList')
+    const failure = {
+      messages: loaded,
+      folded: loaded,
+      status: 'error' as const,
+      error: words,
+      canStop: true,
+      permission: { title: 'Approve?', options: [{ label: 'Allow', send: '1' }] },
+      // A resend answered unknown says nothing beside the read's words.
+      sendErrorMessage: 'Message unconfirmed — check chat before retrying'
+    }
+    await render({ ...failure, readFailedFinally: true })
+    expect(shown(words)).toHaveLength(1)
+    expect(composers()).toHaveLength(0)
+    expect(lists()).toHaveLength(0)
+    expect(banners()).toHaveLength(0)
+    expect(renderer!.root.findAllByProps({ accessibilityLabel: 'Stop the agent' })).toHaveLength(0)
+
+    // A failure that can clear keeps the transcript and the composer.
+    await update({ ...failure, error: "Orca couldn't open this chat's history right now." })
+    expect(listIds()).toEqual(['m1'])
+    expect(composers()).toHaveLength(1)
+    expect(banners()).toHaveLength(1)
+  })
+
   it('renders the route-reported failure verbatim', async () => {
     await render({ sendErrorMessage: 'Permission reply failed' })
 
@@ -262,7 +351,9 @@ describe('MobileNativeChatView', () => {
     try {
       const folded = [assistantTurn('a1', 'Starting')]
       await render({ folded })
-      await act(async () => vi.runOnlyPendingTimers())
+      await act(async () => {
+        vi.runOnlyPendingTimers()
+      })
       scrollToEnd.mockClear()
 
       await update({ folded, streaming: 'Streaming output' })
@@ -270,7 +361,9 @@ describe('MobileNativeChatView', () => {
 
       expect(scrollToOffset).toHaveBeenCalledOnce()
       expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 900 })
-      await act(async () => vi.advanceTimersByTime(60))
+      await act(async () => {
+        vi.advanceTimersByTime(60)
+      })
       expect(scrollToOffset).toHaveBeenCalledOnce()
     } finally {
       vi.useRealTimers()
@@ -353,7 +446,9 @@ describe('MobileNativeChatView', () => {
         list().props.onContentSizeChange(320, 1_250)
         list().props.onMomentumScrollBegin?.({})
       })
-      await act(async () => vi.advanceTimersByTime(200))
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
       act(() => list().props.onContentSizeChange(320, 1_300))
 
       expect(scrollToEnd).not.toHaveBeenCalled()
@@ -439,7 +534,9 @@ describe('MobileNativeChatView', () => {
           }
         })
       })
-      await act(async () => vi.advanceTimersByTime(200))
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
       act(() => list().props.onContentSizeChange(320, 1_250))
 
       expect(scrollToEnd).toHaveBeenCalledOnce()
@@ -471,7 +568,9 @@ describe('MobileNativeChatView', () => {
       expect(scrollToEnd).not.toHaveBeenCalled()
       expect(scrollToOffset).not.toHaveBeenCalled()
 
-      await act(async () => vi.runOnlyPendingTimers())
+      await act(async () => {
+        vi.runOnlyPendingTimers()
+      })
 
       expect(scrollToEnd).toHaveBeenCalledOnce()
       expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false })
@@ -496,43 +595,152 @@ describe('MobileNativeChatView', () => {
     expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 1_200 })
   })
 
-  it('keeps a history load detached after its triggering drag settles', async () => {
+  it('resumes following when the drag that paged in history ends at the tail', async () => {
     vi.useFakeTimers()
     try {
+      // A chat shorter than the screen: its top and its tail are the same place.
+      const shortChat = {
+        contentOffset: { y: 0 },
+        contentSize: { height: 400 },
+        layoutMeasurement: { height: 500 }
+      }
       const folded = [assistantTurn('a1', 'Short history')]
       const onLoadEarlier = vi.fn()
       await render({ folded, hasMore: true, onLoadEarlier })
-      scrollToEnd.mockClear()
 
       act(() => {
         list().props.onScrollBeginDrag?.({})
-        list().props.onScroll({
-          nativeEvent: {
-            contentOffset: { y: 0 },
-            contentSize: { height: 400 },
-            layoutMeasurement: { height: 500 }
-          }
-        })
-        list().props.onScrollEndDrag?.({
-          nativeEvent: {
-            contentOffset: { y: 0 },
-            contentSize: { height: 400 },
-            layoutMeasurement: { height: 500 }
-          }
-        })
+        list().props.onScroll({ nativeEvent: shortChat })
+        list().props.onScrollEndDrag?.({ nativeEvent: shortChat })
       })
-      await act(async () => vi.advanceTimersByTime(200))
+      await act(async () => {
+        vi.advanceTimersByTime(200)
+      })
       act(() => list().props.onContentSizeChange(320, 950))
 
       expect(onLoadEarlier).toHaveBeenCalledOnce()
-      expect(scrollToEnd).not.toHaveBeenCalled()
+      expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 950 })
+      expect(
+        renderer!.root.findAll((node) => node.props.accessibilityLabel === 'Scroll to latest')
+      ).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('pages in history only from a scroll the reader made', async () => {
+    const onLoadEarlier = vi.fn()
+    await render({ folded: [assistantTurn('a1', 'Latest')], hasMore: true, onLoadEarlier })
+    const nearTop = {
+      nativeEvent: {
+        contentOffset: { y: 40 },
+        contentSize: { height: 520 },
+        layoutMeasurement: { height: 500 }
+      }
+    }
+
+    // The tail pin of a chat barely taller than the screen reports an offset near the top too.
+    act(() => list().props.onScroll(nearTop))
+    expect(onLoadEarlier).not.toHaveBeenCalled()
+
+    act(() => {
+      list().props.onScrollBeginDrag?.({})
+      list().props.onScroll(nearTop)
+    })
+    expect(onLoadEarlier).toHaveBeenCalledOnce()
+  })
+
+  it('anchors the first visible row, which the header above it is not', async () => {
+    const folded = [assistantTurn('a1', 'History')]
+    await render({ folded, hasMore: true })
+    expect(list().props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 1 })
+
+    await update({ folded, hasMore: false })
+    expect(list().props.maintainVisibleContentPosition).toEqual({ minIndexForVisible: 0 })
+  })
+
+  describe('on the page, where the list reports no drag or momentum', () => {
+    beforeEach(() => {
+      platform.OS = 'web'
+    })
+
+    afterEach(() => {
+      platform.OS = 'ios'
+    })
+
+    function scrolledTo(y: number, contentHeight: number) {
+      return {
+        nativeEvent: {
+          contentOffset: { y },
+          contentSize: { height: contentHeight },
+          layoutMeasurement: { height: 500 }
+        }
+      }
+    }
+
+    it('stops following when the reader scrolls up, and resumes at the end', async () => {
+      await render({ folded: [assistantTurn('a1', 'Latest')] })
+      act(() => {
+        list().props.onContentSizeChange(320, 1_000)
+        list().props.onScroll(scrolledTo(500, 1_000))
+      })
+      scrollToOffset.mockClear()
+
+      // No drag event arrives on the page: the move up is all there is to go on.
+      act(() => {
+        list().props.onScroll(scrolledTo(300, 1_000))
+        list().props.onContentSizeChange(320, 1_200)
+      })
       expect(scrollToOffset).not.toHaveBeenCalled()
       expect(
         renderer!.root.findAll((node) => node.props.accessibilityLabel === 'Scroll to latest')
       ).toHaveLength(1)
-    } finally {
-      vi.useRealTimers()
-    }
+
+      act(() => {
+        list().props.onScroll(scrolledTo(700, 1_200))
+        list().props.onContentSizeChange(320, 1_400)
+      })
+      expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 1_400 })
+    })
+
+    it('does not take its own pin, landing short of a grown end, for the reader', async () => {
+      await render({ folded: [assistantTurn('a1', 'Latest')] })
+      act(() => {
+        list().props.onContentSizeChange(320, 1_000)
+        list().props.onScroll(scrolledTo(500, 1_000))
+      })
+      scrollToOffset.mockClear()
+
+      // The pin reached the end it was sent to; the reply had grown 400 past it by then.
+      act(() => {
+        list().props.onScroll(scrolledTo(700, 1_600))
+        list().props.onContentSizeChange(320, 1_600)
+      })
+
+      expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 1_600 })
+    })
+
+    it('pins a resized viewport to the measured end, never the list estimate', async () => {
+      await render({ folded: [assistantTurn('a1', 'Latest')] })
+      act(() => list().props.onContentSizeChange(320, 1_000))
+      scrollToEnd.mockClear()
+
+      act(() => list().props.onLayout?.({}))
+
+      expect(scrollToEnd).not.toHaveBeenCalled()
+      expect(scrollToOffset).toHaveBeenLastCalledWith({ animated: false, offset: 1_000 })
+    })
+
+    it('pages in history when the reader scrolls up to the top, not when a pin passes it', async () => {
+      const onLoadEarlier = vi.fn()
+      await render({ folded: [assistantTurn('a1', 'Latest')], hasMore: true, onLoadEarlier })
+
+      act(() => list().props.onScroll(scrolledTo(40, 540)))
+      expect(onLoadEarlier).not.toHaveBeenCalled()
+
+      act(() => list().props.onScroll(scrolledTo(10, 540)))
+      expect(onLoadEarlier).toHaveBeenCalledOnce()
+    })
   })
 
   it('routes an accepted send through the immediate nonanimated tail owner', async () => {
@@ -540,7 +748,9 @@ describe('MobileNativeChatView', () => {
     try {
       const folded = [assistantTurn('a1', 'History')]
       await render({ folded })
-      await act(async () => vi.runOnlyPendingTimers())
+      await act(async () => {
+        vi.runOnlyPendingTimers()
+      })
       await scrollAwayFromTail()
       scrollToEnd.mockClear()
 
@@ -548,7 +758,9 @@ describe('MobileNativeChatView', () => {
 
       expect(scrollToEnd).toHaveBeenCalledOnce()
       expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false })
-      await act(async () => vi.advanceTimersByTime(60))
+      await act(async () => {
+        vi.advanceTimersByTime(60)
+      })
       expect(scrollToEnd).toHaveBeenCalledOnce()
     } finally {
       vi.useRealTimers()
@@ -577,7 +789,9 @@ describe('MobileNativeChatView', () => {
     try {
       const folded = [assistantTurn('a1', 'Latest')]
       await render({ folded })
-      await act(async () => vi.runOnlyPendingTimers())
+      await act(async () => {
+        vi.runOnlyPendingTimers()
+      })
       scrollToEnd.mockClear()
 
       await update({ folded, keyboardInset: 320 })
@@ -585,7 +799,9 @@ describe('MobileNativeChatView', () => {
 
       expect(scrollToEnd).toHaveBeenCalledOnce()
       expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false })
-      await act(async () => vi.advanceTimersByTime(60))
+      await act(async () => {
+        vi.advanceTimersByTime(60)
+      })
       expect(scrollToEnd).toHaveBeenCalledOnce()
 
       await scrollAwayFromTail()
@@ -611,14 +827,20 @@ describe('MobileNativeChatView', () => {
     vi.useFakeTimers()
     try {
       await render({ inputLockReason: 'waiting' })
-      await act(async () => vi.advanceTimersByTime(600))
+      await act(async () => {
+        vi.advanceTimersByTime(600)
+      })
       expect(composer().props.disabled).toBe(true)
 
       await update({ inputLockReason: null })
       expect(composer().props.disabled).toBe(true)
-      await act(async () => vi.advanceTimersByTime(300))
+      await act(async () => {
+        vi.advanceTimersByTime(300)
+      })
       await update({ inputLockReason: 'waiting' })
-      await act(async () => vi.advanceTimersByTime(600))
+      await act(async () => {
+        vi.advanceTimersByTime(600)
+      })
 
       expect(composer().props.disabled).toBe(true)
       expect(composer().props.placeholder).toBe('Waiting for terminal…')
@@ -631,12 +853,18 @@ describe('MobileNativeChatView', () => {
     vi.useFakeTimers()
     try {
       await render({ inputLockReason: 'waiting' })
-      await act(async () => vi.advanceTimersByTime(600))
+      await act(async () => {
+        vi.advanceTimersByTime(600)
+      })
       await update({ inputLockReason: null })
-      await act(async () => vi.advanceTimersByTime(599))
+      await act(async () => {
+        vi.advanceTimersByTime(599)
+      })
       expect(composer().props.disabled).toBe(true)
 
-      await act(async () => vi.advanceTimersByTime(1))
+      await act(async () => {
+        vi.advanceTimersByTime(1)
+      })
 
       expect(composer().props.disabled).toBe(false)
       expect(composer().props.placeholder).toBe('Message, @files, /commands')
@@ -644,235 +872,36 @@ describe('MobileNativeChatView', () => {
       vi.useRealTimers()
     }
   })
+  // Why: a terminal-backed send types into the agent's prompt and could answer it; drafting cannot.
+  describe('a prompt card owns Send in terminal-backed chat', () => {
+    const permission = { title: 'Approve?', options: [{ label: 'Allow', send: '1' }] }
 
-  describe('structured turn status wiring', () => {
-    const userTurn = (id: string, text: string): NativeChatMessage => ({
-      id,
-      role: 'user',
-      blocks: [{ type: 'text', text }],
-      timestamp: 0,
-      source: 'transcript'
+    it('blocks only Send while the card shows, and frees it when the card clears', async () => {
+      await render({ permission })
+      expect(composer().props.sendDisabled).toBe(true)
+      expect(composer().props.disabled).toBe(false)
+      expect(composer().props.placeholder).toBe('Message, @files, /commands')
+
+      await update({ permission: null })
+      expect(composer().props.sendDisabled).toBe(false)
     })
 
-    function rowProps(id: string): Record<string, unknown> {
-      return (renderedRow(id) as { props: Record<string, unknown> }).props
-    }
-
-    function footerProps(): Record<string, unknown> | null {
-      const list = renderer!.root.find((node) => node.type === 'FlatList')
-      const footer = list.props.ListFooterComponent as
-        | { props: Record<string, unknown> }
-        | null
-        | undefined
-      return footer?.props ?? null
-    }
-
-    function workingIndicators(): ReactTestInstance[] {
-      return renderer!.root.findAll((node) => node.type === 'WorkingIndicator')
-    }
-
-    it('puts the live status at the turn tail and drops the three-dot indicator', async () => {
-      const folded = [userTurn('u1', 'go'), assistantTurn('a1', 'still working')]
-      await render({ messages: folded, folded, structuredActivityUi: true, agentWorking: true })
-      const props = rowProps('u1')
-      expect(props.structuredActivityUi).toBe(true)
-      expect(props.turnStatus).toBeNull()
-      // Nothing reports reasoning, so the one live footer counts instead of guessing.
-      expect(footerProps()).toMatchObject({ thinking: false, workedSeconds: null })
-      expect(listIds().at(-1)).toBe('a1')
-      expect(props.activeTurnIsWorking).toBe(true)
-      expect(workingIndicators()).toHaveLength(0)
-    })
-
-    it.each([
-      {
-        label: 'structured question',
-        cardType: 'ChatAsk',
-        interaction: {
-          ask: {
-            questions: [
-              {
-                question: 'Pick destination',
-                multiSelect: false,
-                options: [{ label: 'Choice A' }, { label: 'Choice B' }]
-              }
-            ]
-          }
+    it('blocks Send for an ask and a heuristic question too', async () => {
+      await render({
+        ask: {
+          questions: [{ question: 'Tabs?', multiSelect: false, options: [{ label: 'Tabs' }] }]
         }
-      },
-      {
-        label: 'question',
-        cardType: 'ChatQuestion',
-        interaction: {
-          question: {
-            question: 'Pick destination',
-            options: ['Choice A', 'Choice B'],
-            multiSelect: false,
-            allowOther: true,
-            optionTokens: ['choice-a', 'choice-b']
-          }
-        }
-      },
-      {
-        label: 'approval',
-        cardType: 'ChatPermission',
-        interaction: {
-          permission: {
-            title: 'Allow command?',
-            detail: 'pnpm test',
-            options: [
-              { label: 'Allow', send: 'allow' },
-              { label: 'Deny', send: 'deny' }
-            ]
-          }
-        }
-      }
-    ])('hides live turn activity for a pending $label without settling it', async (testCase) => {
-      const folded = [userTurn('u1', 'go'), assistantTurn('a1', 'waiting for input')]
-      const working = {
-        messages: folded,
-        folded,
-        structuredActivityUi: true,
-        agentWorking: true,
-        canStop: true
-      }
-      await render({ ...working, ...testCase.interaction })
-
-      expect(footerProps()).toBeNull()
-      expect(rowProps('a1').activeTurnIsWorking).toBe(true)
-      expect(
-        renderer!.root.findAll((node) => node.props.accessibilityLabel === 'Stop the agent')
-      ).toHaveLength(1)
-      expect(renderer!.root.findAll((node) => node.type === testCase.cardType)).toHaveLength(1)
-
-      await update(working)
-      expect(footerProps()).toMatchObject({ thinking: false, workedSeconds: null })
-      expect(rowProps('a1').activeTurnIsWorking).toBe(true)
-    })
-
-    it('reports the live turn as thinking only when its journal says it is reasoning', async () => {
-      const folded = [userTurn('u1', 'go')]
-      await render({
-        messages: folded,
-        folded,
-        structuredActivityUi: true,
-        agentWorking: true,
-        turnIndicator: { thinking: true, activityText: null }
       })
-      expect(rowProps('u1').turnStatus).toBeNull()
-      expect(footerProps()).toMatchObject({ thinking: true, workedSeconds: null })
-    })
-
-    it('hands the live row the provider activity copy that outranks its fallbacks', async () => {
-      const folded = [userTurn('u1', 'go')]
-      await render({
-        messages: folded,
-        folded,
-        structuredActivityUi: true,
-        agentWorking: true,
-        turnIndicator: { thinking: true, activityText: 'Running pnpm test' }
+      expect(composer().props.sendDisabled).toBe(true)
+      await update({
+        question: { question: 'Name?', options: [], multiSelect: false, optionTokens: [] }
       })
-      expect(footerProps()).toMatchObject({
-        thinking: true,
-        activityText: 'Running pnpm test'
-      })
+      expect(composer().props.sendDisabled).toBe(true)
     })
 
-    it('keeps the activity copy on the live footer instead of a historical row', async () => {
-      const folded = [userTurn('u1', 'go'), userTurn('u2', 'again')]
-      await render({
-        messages: folded,
-        folded,
-        structuredActivityUi: true,
-        agentWorking: true,
-        turnIndicator: { thinking: false, activityText: 'Running pnpm test' }
-      })
-      expect(rowProps('u1')).not.toHaveProperty('turnActivityText')
-      expect(rowProps('u2')).not.toHaveProperty('turnActivityText')
-      expect(footerProps()).toMatchObject({ activityText: 'Running pnpm test' })
-    })
-
-    it('keeps the bridge lane on the three-dot indicator with no turn status', async () => {
-      const folded = [userTurn('u1', 'go')]
-      await render({ messages: folded, folded, agentWorking: true })
-      const props = rowProps('u1')
-      expect(props.structuredActivityUi).toBe(false)
-      expect(props.turnStatus).toBeNull()
-      expect(props.activeTurnIsWorking).toBe(false)
-      expect(footerProps()).toBeNull()
-      expect(workingIndicators()).toHaveLength(1)
-    })
-
-    it('settles the finished turn to a tappable duration', async () => {
-      const folded = [userTurn('u1', 'go'), assistantTurn('a1', 'done')]
-      await render({ messages: folded, folded, structuredActivityUi: true, agentWorking: true })
-      expect(rowProps('u1').turnStatus).toBeNull()
-      expect(footerProps()).toMatchObject({ thinking: false, workedSeconds: null })
-      await update({ messages: folded, folded, structuredActivityUi: true, agentWorking: false })
-      const settled = rowProps('u1')
-      expect(settled.turnStatus).toMatchObject({ thinking: false })
-      expect((settled.turnStatus as { workedSeconds: number | null }).workedSeconds).toBeTypeOf(
-        'number'
-      )
-      expect(settled.onToggleTurn).toBeTypeOf('function')
-      expect(settled.activeTurnIsWorking).toBe(false)
-      expect(footerProps()).toBeNull()
-    })
-
-    it('hangs no status row on an assistant row', async () => {
-      const folded = [userTurn('u1', 'go'), assistantTurn('a1', 'done')]
-      await render({ messages: folded, folded, structuredActivityUi: true, agentWorking: true })
-      expect(rowProps('a1').turnStatus).toBeNull()
-      // The assistant row still belongs to the live turn, so its tool row stays visible.
-      expect(rowProps('a1').activeTurnIsWorking).toBe(true)
-      expect(footerProps()).toMatchObject({ workedSeconds: null })
-    })
-
-    it('does not carry a running turn clock across chat surfaces', async () => {
-      vi.useFakeTimers()
-      try {
-        vi.setSystemTime(1_000)
-        const firstTab = [userTurn('u1', 'first')]
-        await render({
-          messages: firstTab,
-          folded: firstTab,
-          structuredActivityUi: true,
-          agentWorking: true,
-          sendSurfaceId: 'host\0worktree\0tab-a'
-        })
-        expect(footerProps()).toMatchObject({ startedAt: 1_000 })
-
-        vi.setSystemTime(12_000)
-        const secondTab = [userTurn('u2', 'second')]
-        await update({
-          messages: secondTab,
-          folded: secondTab,
-          structuredActivityUi: true,
-          agentWorking: true,
-          sendSurfaceId: 'host\0worktree\0tab-b'
-        })
-
-        expect(footerProps()).toMatchObject({ startedAt: 12_000 })
-      } finally {
-        vi.useRealTimers()
-      }
-    })
-
-    it('does not treat pre-user history as part of the live turn', async () => {
-      const history = [
-        assistantTurn('a0', 'before the first prompt'),
-        userTurn('u1', 'go'),
-        assistantTurn('a1', 'working')
-      ]
-      await render({
-        messages: history,
-        folded: history,
-        structuredActivityUi: true,
-        agentWorking: true
-      })
-
-      expect(rowProps('a0').activeTurnIsWorking).toBe(false)
-      expect(rowProps('a1').activeTurnIsWorking).toBe(true)
+    it('leaves a structured chat composer open: its host queues the send behind the prompt', async () => {
+      await render({ permission, structuredActivityUi: true })
+      expect(composer().props.sendDisabled).toBe(false)
     })
   })
 })

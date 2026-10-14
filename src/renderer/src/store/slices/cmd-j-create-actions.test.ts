@@ -11,9 +11,13 @@ import {
 const createWebRuntimeSessionBrowserTabMock = vi.hoisted(() => vi.fn())
 const createWebRuntimeSessionTerminalMock = vi.hoisted(() => vi.fn())
 
-vi.mock('@/runtime/web-runtime-session', () => ({
-  createWebRuntimeSessionBrowserTab: createWebRuntimeSessionBrowserTabMock,
+vi.mock('@/runtime/web-runtime-terminal-creation', () => ({
   createWebRuntimeSessionTerminal: createWebRuntimeSessionTerminalMock
+}))
+
+vi.mock('@/store/slices/browser/paired-browser-tab-creator', () => ({
+  getRegisteredPairedBrowserTabCreator: () => null,
+  loadPairedBrowserTabCreator: async () => createWebRuntimeSessionBrowserTabMock
 }))
 
 vi.mock('@/lib/focus-terminal-tab-surface', () => ({

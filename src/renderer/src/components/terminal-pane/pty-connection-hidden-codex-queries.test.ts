@@ -6,6 +6,7 @@ import {
   POST_REPLAY_LIVE_SNAPSHOT_RESET,
   POST_REPLAY_REATTACH_RESET
 } from '../../../../shared/terminal-mode-reset-profiles'
+import { replayEpilogue } from './pty-connection-test-replay-epilogue'
 import { makePaneKey } from '../../../../shared/stable-pane-id'
 import { flushAsyncTicks } from './pty-connection-test-async'
 import {
@@ -136,14 +137,14 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 }
 
 describe('connectPanePty', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
     transportFactoryQueue = []
     createdTransportOptions = []
     storeSubscribers = []
     mockStoreState = createInitialStoreState(() => mockStoreState)
-    installTerminalTestGlobals()
+    await installTerminalTestGlobals()
   })
 
   afterEach(async () => {
@@ -187,34 +188,40 @@ describe('connectPanePty', () => {
     binding.dispose()
   })
 
-  it('keeps hidden Codex terminal query chunks on the live xterm path', async () => {
-    const { connectPanePty } = await import('./pty-connection')
-    const transport = createMockTransport('pty-id')
-    const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
-    transport.connect.mockImplementation(async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
-      capturedDataCallback.current = callbacks.onData ?? null
-      return 'pty-id'
-    })
-    transportFactoryQueue.push(transport)
+  it.each(['codex', 'sleep 30 && codex', 'sleep 30 && claude'])(
+    'keeps hidden %s terminal query chunks on the live xterm path',
+    async (command) => {
+      const { connectPanePty } = await import('./pty-connection')
+      const transport = createMockTransport('pty-id')
+      const capturedDataCallback: { current: ((data: string) => void) | null } = { current: null }
+      transport.connect.mockImplementation(
+        async ({ callbacks }: { callbacks: ConnectCallbacks }) => {
+          capturedDataCallback.current = callbacks.onData ?? null
+          return 'pty-id'
+        }
+      )
+      transportFactoryQueue.push(transport)
 
-    const pane = createPane(1)
-    const manager = createManager(1)
-    const binding = connectPanePty(
-      pane as never,
-      manager as never,
-      createDeps({
-        isVisibleRef: { current: false },
-        startup: { command: 'codex' }
-      }) as never
-    )
-    await flushAsyncTicks(6)
+      const pane = createPane(1)
+      const manager = createManager(1)
+      const binding = connectPanePty(
+        pane as never,
+        manager as never,
+        // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: The connection fixture supplies the hidden pane APIs with this explicit startup command.
+        createDeps({
+          isVisibleRef: { current: false },
+          startup: { command }
+        }) as never
+      )
+      await flushAsyncTicks(6)
 
-    capturedDataCallback.current?.('\x1b[c')
+      capturedDataCallback.current?.('\x1b[c')
 
-    expect(pane.terminal.write).toHaveBeenCalledWith('\x1b[c', expect.any(Function))
+      expect(pane.terminal.write).toHaveBeenCalledWith('\x1b[c', expect.any(Function))
 
-    binding.dispose()
-  })
+      binding.dispose()
+    }
+  )
 
   it('keeps only coalesced hidden Codex terminal queries on the live xterm path', async () => {
     const { connectPanePty } = await import('./pty-connection')
@@ -520,15 +527,15 @@ describe('connectPanePty', () => {
 
       // A live agent owns ?1004h (focus reporting); the plain reset's ?1004l would silence focus events until restart, since agents only enable it at startup.
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_AGENT_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_AGENT_SNAPSHOT_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_SNAPSHOT_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_DEAD_TUI_RESET,
+        replayEpilogue(POST_REPLAY_DEAD_TUI_RESET),
         expect.any(Function)
       )
     } finally {
@@ -583,11 +590,11 @@ describe('connectPanePty', () => {
       await flushAsyncTicks(20)
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        POST_REPLAY_DEAD_TUI_RESET,
+        replayEpilogue(POST_REPLAY_DEAD_TUI_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_AGENT_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_AGENT_SNAPSHOT_RESET),
         expect.any(Function)
       )
     } finally {
@@ -634,15 +641,15 @@ describe('connectPanePty', () => {
       await flushAsyncTicks(20)
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_SNAPSHOT_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_REATTACH_RESET,
+        replayEpilogue(POST_REPLAY_REATTACH_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_DEAD_TUI_RESET,
+        replayEpilogue(POST_REPLAY_DEAD_TUI_RESET),
         expect.any(Function)
       )
     } finally {
@@ -689,11 +696,11 @@ describe('connectPanePty', () => {
       await flushAsyncTicks(20)
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_SNAPSHOT_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_REATTACH_RESET,
+        replayEpilogue(POST_REPLAY_REATTACH_RESET),
         expect.any(Function)
       )
     } finally {
@@ -739,11 +746,11 @@ describe('connectPanePty', () => {
       await flushAsyncTicks(20)
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        POST_REPLAY_DEAD_TUI_RESET,
+        replayEpilogue(POST_REPLAY_DEAD_TUI_RESET),
         expect.any(Function)
       )
       expect(pane.terminal.write).not.toHaveBeenCalledWith(
-        POST_REPLAY_LIVE_SNAPSHOT_RESET,
+        replayEpilogue(POST_REPLAY_LIVE_SNAPSHOT_RESET),
         expect.any(Function)
       )
       expect(window.api.pty.inspectProcess).not.toHaveBeenCalled()

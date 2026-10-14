@@ -29,7 +29,8 @@ export function createActiveWorkspaceTerminalActions(
         ? worktreeRoute.route.runtimeEnvironmentId
         : getRuntimeEnvironmentIdForWorktree(state, worktreeId)
       if (runtimeEnvironmentId) {
-        const { createWebRuntimeSessionTerminal } = await import('@/runtime/web-runtime-session')
+        const { createWebRuntimeSessionTerminal } =
+          await import('@/runtime/web-runtime-terminal-creation')
         await createWebRuntimeSessionTerminal({
           worktreeId,
           environmentId: runtimeEnvironmentId,
@@ -43,7 +44,7 @@ export function createActiveWorkspaceTerminalActions(
       }
       const terminal = get().createTab(worktreeId, groupId)
       get().setActiveTab(terminal.id)
-      get().setActiveTabType('terminal')
+      get().setActiveTabType('terminal', worktreeId)
       const latest = get()
       const currentTerminals = latest.tabsByWorktree[worktreeId] ?? []
       const currentEditors = latest.openFiles.filter((file) => file.worktreeId === worktreeId)

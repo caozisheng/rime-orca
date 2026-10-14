@@ -19,10 +19,17 @@ export function createTerminalTabAttentionActions(
   return {
     markTerminalTabUnread: (tabId, reason) => {
       const state = get()
-      const ownerTab = Object.values(state.tabsByWorktree ?? {})
-        .flat()
-        .find((t) => t.id === tabId)
-      if (!ownerTab) {
+      // Why both indexes: a container id is a terminal tab id, or a structured chat's unified tab
+      // id (which has no TerminalTab record) — the same pair `findRenamableUnifiedTab` resolves,
+      // and the same pair SortableTab reads this marker back under.
+      const ownsTab =
+        Object.values(state.tabsByWorktree ?? {})
+          .flat()
+          .some((tab) => tab.id === tabId) ||
+        Object.values(state.unifiedTabsByWorktree ?? {})
+          .flat()
+          .some((tab) => tab.contentType === 'agent-session' && tab.id === tabId)
+      if (!ownsTab) {
         return
       }
       // Why: terminal attention persists until real interaction.
@@ -113,7 +120,7 @@ export function createTerminalTabAttentionActions(
           owningWorktreeId &&
           resolveTerminalWorktreeRoute(state, owningWorktreeId)?.runtimeEnvironmentId
         ) {
-          void import('@/runtime/web-runtime-session').then(({ setWebRuntimeTabProps }) =>
+          void import('@/runtime/web-runtime-terminal-actions').then(({ setWebRuntimeTabProps }) =>
             setWebRuntimeTabProps({ worktreeId: owningWorktreeId, tabId: item.id, color })
           )
         }

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { ComponentProps, JSX } from 'react'
-import { act, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SubagentExpansionProvider } from './ai-vault-subagent-expansion'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -30,7 +30,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  document.body.replaceChildren()
+  cleanup()
 })
 
 function makeSession(overrides: Partial<AiVaultSession> = {}): AiVaultSession {
@@ -149,7 +149,7 @@ describe('independent child resume', () => {
       <SessionSubagentsSection session={makeSession({ agent: 'omp' })} resume={resume} />
     )
     await act(async () => {})
-    fireEvent.click(getByRole('button', { name: 'Resume in Worktree' }))
+    fireEvent.click(getByRole('button', { name: 'Resume in Folder' }))
     expect(resume.getState).toHaveBeenCalledWith(child)
     expect(resume.onResume).toHaveBeenCalledExactlyOnceWith(child, 'folder:repo')
   })
@@ -220,7 +220,7 @@ describe('nested OMP history', () => {
       parentFilePath: child.filePath
     })
     expect(view.queryByText('Research')).not.toBeNull()
-    fireEvent.click(view.getAllByRole('button', { name: 'Resume in Worktree' })[1])
+    fireEvent.click(view.getAllByRole('button', { name: 'Resume in Folder' })[1])
     expect(resume.onResume).toHaveBeenCalledExactlyOnceWith(grandchild, 'folder:repo')
   })
 

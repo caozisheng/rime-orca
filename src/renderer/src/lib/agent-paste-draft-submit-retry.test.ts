@@ -105,7 +105,7 @@ describe('post-paste submit retry Enter', () => {
 
     await expect(promise).resolves.toBe(true)
     expect(enterWrites()).toHaveLength(2)
-    expect(testState.sendRuntimePtyInputVerified).toHaveBeenLastCalledWith({}, 'pty-1', '\r')
+    expect(testState.sendRuntimePtyInputVerified).toHaveBeenLastCalledWith('pty-1', '\r', 'launch')
     expect(vi.getTimerCount()).toBe(0)
   })
 
@@ -130,7 +130,7 @@ describe('post-paste submit retry Enter', () => {
   it('holds the PTY input transaction across the retry Enter', async () => {
     const writes: string[] = []
     testState.sendRuntimePtyInputVerified.mockImplementation(
-      async (_settings: unknown, _ptyId: string, data: string) => {
+      async (_ptyId: string, data: string) => {
         writes.push(data)
         return true
       }
@@ -141,9 +141,9 @@ describe('post-paste submit retry Enter', () => {
     await vi.advanceTimersByTimeAsync(POST_PASTE_SUBMIT_DELAY_MS)
     // Competing paste on the same PTY: it must not open a frame the retry can land in.
     const competing = sendAgentDraftPasteContent(
-      {},
       'pty-1',
-      'y'.repeat(AGENT_DRAFT_PASTE_DIRECT_MAX_BYTES + 1)
+      'y'.repeat(AGENT_DRAFT_PASTE_DIRECT_MAX_BYTES + 1),
+      'driving'
     )
     await flushMicrotasks(10)
     expect(writes).toEqual([PASTED_ISSUE_URL, '\r'])
@@ -172,7 +172,7 @@ describe('post-paste submit retry Enter', () => {
 })
 
 function enterWrites(): unknown[][] {
-  return testState.sendRuntimePtyInputVerified.mock.calls.filter((call) => call[2] === '\r')
+  return testState.sendRuntimePtyInputVerified.mock.calls.filter((call) => call[1] === '\r')
 }
 
 function startCodexSubmit(): Promise<boolean> {

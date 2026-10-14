@@ -11,15 +11,14 @@ import type {
 } from '../../shared/agent-session-host-authority'
 import { canonicalizeAgentSessionIdentity } from './agent-session-claim-identity'
 import { isTuiAgentEnabled } from '../../shared/tui-agent-selection'
-import { resolveLocalWindowsAgentStartupShell } from '../../shared/windows-terminal-shell'
 import { buildAgentResumeStartupPlan } from '../../shared/tui-agent-startup'
+import { agentLaunchQuotingShell } from '../../shared/agent-launch-runtime'
+import { OrchestrationError } from './orchestration/orchestration-error'
+import { withAgentSessionAccountEnv } from './agent-session-account-env'
 import {
   resolveTuiAgentLaunchArgs,
   resolveTuiAgentLaunchEnv
 } from '../../shared/tui-agent-launch-defaults'
-import type { AgentSessionLaunchArgs } from '../../shared/agent-session-record'
-import { resolveStartupShell } from '../../shared/tui-agent-startup-shell'
-import { resolveAgentSessionResumeArgs } from './agent-session-resume-args'
 
 export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntimeWithResolveWorktreeRemovalTarget {
   protected getAgentSessionExecutionNamespace(
@@ -51,11 +50,10 @@ export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntim
     operation: 'resume' | 'create',
     signal?: AbortSignal
   ): Promise<boolean> {
-    const provider = workspace.connectionId
-      ? this.getSshProviderFn?.(workspace.connectionId)
-      : this.getLocalProvider()
+    // Why: an SSH workspace has no provider here; an unavailable route is not proof of an old
+    // owner, so preserve the structured failure.
+    const provider = workspace.connectionId ? null : this.getLocalProvider()
     if (!provider) {
-      // An unavailable route is not proof of an old owner; preserve the structured failure.
       return true
     }
     const probe =
@@ -63,8 +61,8 @@ export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntim
         ? provider.supportsAgentSessionClaims
         : provider.supportsAgentSessionCreateOperations
     if (!probe) {
-      // Local in-process PTYs need no wire negotiation; unknown SSH providers are legacy.
-      return workspace.connectionId === null
+      // Local in-process PTYs need no wire negotiation.
+      return true
     }
     try {
       return (await probe.call(provider, { signal })) === true
@@ -90,27 +88,26 @@ export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntim
 
   async ensureAgentSession(
     request: RuntimeEnsureAgentSessionRequest,
-    _caller: RuntimeAgentSessionRpcCaller = {},
-    handoffAuthority?: {
-      spawnToken: string
-      providerRoot: string
-      sessionId: string
-      launchArgs?: AgentSessionLaunchArgs
-    }
+    _caller: RuntimeAgentSessionRpcCaller = {}
   ): Promise<RuntimeEnsureAgentSessionResult> {
     if (request.kind === 'automatic') {
       // Legacy renderer sleep records are migration evidence, not host authority.
       throw new Error('agent_session_resume_not_authorized')
     }
+    if (
+      request.agent === 'opencode' &&
+      Object.values(request.launchPreferences ?? {}).some((value) => value !== undefined)
+    ) {
+      throw new OrchestrationError(
+        'capability_unsupported',
+        'OpenCode resume preferences are not verified by this execution host.'
+      )
+    }
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
     const workspace = await this.resolveTerminalWorkspaceLaunchScope(request.worktree)
-    const resolvedNamespace = this.getAgentSessionExecutionNamespace(workspace, request.agent)
-    const namespace =
-      resolvedNamespace && handoffAuthority
-        ? { ...resolvedNamespace, providerRoot: handoffAuthority.providerRoot }
-        : resolvedNamespace
+    const namespace = this.getAgentSessionExecutionNamespace(workspace, request.agent)
     if (
       !namespace ||
       !(await this.executionOwnerSupportsAgentSessionOperation(workspace, 'resume', _caller.signal))
@@ -129,33 +126,21 @@ export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntim
     if (!isTuiAgentEnabled(request.agent, settings.disabledTuiAgents)) {
       throw new Error('Selected agent is disabled. Choose an enabled agent before resuming.')
     }
-    const platform = this.getAgentLaunchPlatformForWorkspace(workspace)
+    const launchRuntime = this.resolveAgentLaunchRuntime(workspace, request.agent)
+    const { platform } = launchRuntime
+    const shell = agentLaunchQuotingShell(launchRuntime)
     // Why: `workspace.repo` is display metadata and may be a row from another host; the launch
     // shape must match the PTY route this scope already resolved.
     const isRemote = Boolean(workspace.connectionId)
-    const shell = resolveLocalWindowsAgentStartupShell({
-      platform,
-      isRemote,
-      terminalWindowsShell: settings.terminalWindowsShell
-    })
     const startup = buildAgentResumeStartupPlan({
       agent: request.agent,
       providerSession: identity.providerSession,
       cmdOverrides: settings.agentCmdOverrides ?? {},
-      agentArgs: resolveAgentSessionResumeArgs({
-        requestArgs: request.agentArgs,
-        persistedArgs: handoffAuthority?.launchArgs,
-        defaultArgs: resolveTuiAgentLaunchArgs(request.agent, settings.agentDefaultArgs),
-        shell: resolveStartupShell(platform, shell)
-      }),
-      agentEnv: {
-        ...resolveTuiAgentLaunchEnv(request.agent, settings.agentDefaultEnv),
-        ...(handoffAuthority && request.agent === 'codex'
-          ? { CODEX_HOME: handoffAuthority.providerRoot }
-          : handoffAuthority && request.agent === 'claude'
-            ? { CLAUDE_CONFIG_DIR: handoffAuthority.providerRoot }
-            : {})
-      },
+      agentArgs:
+        request.agentArgs !== undefined
+          ? request.agentArgs
+          : resolveTuiAgentLaunchArgs(request.agent, settings.agentDefaultArgs),
+      agentEnv: resolveTuiAgentLaunchEnv(request.agent, settings.agentDefaultEnv),
       ompResumeFilePath: request.ompResumeFilePath,
       sessionOptions: this.toAgentSessionOptions(request.launchPreferences),
       sessionOptionsOverrideAgentArgs: Boolean(request.launchPreferences),
@@ -166,26 +151,22 @@ export class OrcaRuntimeWithGetAgentSessionExecutionNamespace extends OrcaRuntim
     if (!startup) {
       throw new Error('agent_session_identity_required')
     }
-    await this.markWorkspaceTrustedForAgent(request.agent, workspace.connectionId, workspace.path)
     if (_caller.signal?.aborted) {
       throw new Error('client_disconnected')
     }
     const terminal = await this.createTerminal(`id:${workspace.id}`, {
       command: startup.launchCommand,
-      env: startup.env,
+      env: withAgentSessionAccountEnv(startup.env, request.accountEnv),
       launchConfig: startup.launchConfig,
       startupCommandDelivery: startup.startupCommandDelivery,
       launchAgent: request.agent,
+      launchRuntime,
+      terminalKittyKeyboardProtocol: request.terminalKittyKeyboardProtocol,
       presentation: request.presentation ?? 'background',
       tabId: request.placement?.tabId,
       leafId: request.placement?.leafId,
       agentSessionClaim: claim,
-      ...(handoffAuthority
-        ? {
-            launchToken: handoffAuthority.spawnToken,
-            structuredAgentSessionId: handoffAuthority.sessionId
-          }
-        : {}),
+      ...(request.spawnIntent ? { spawnIntent: request.spawnIntent } : {}),
       signal: _caller.signal
     })
     return {

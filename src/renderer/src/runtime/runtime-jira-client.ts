@@ -16,15 +16,18 @@ import type {
   JiraViewer
 } from '../../../shared/jira-types'
 import { searchLocalJiraIssues } from './local-jira-search-cancellation'
-import { callRuntimeRpc, RuntimeRpcCallError } from './runtime-rpc-client'
+import { callRuntimeRpc } from './runtime-rpc-client'
+import { RuntimeRpcCallError } from './runtime-rpc-result'
 import { isRuntimeProviderSearchQueryWithinLimit } from './runtime-provider-search-bounds'
 import { readRuntimeJiraPayload } from './runtime-jira-payload-stream'
 import { getJiraRuntimeTarget, type RuntimeJiraSettings } from './runtime-jira-target'
+import { parseJiraConnectionStatus } from './runtime-jira-connection-status'
 
 export { jiraLookupIssueSummary, jiraReadStatus } from './runtime-jira-summary-client'
 export {
   jiraCreateIssue,
   jiraListAssignableUsers,
+  jiraListAssignableUsersForProject,
   jiraSearchUsers
 } from './runtime-jira-user-fields-client'
 export type { RuntimeJiraSettings } from './runtime-jira-target'
@@ -52,9 +55,11 @@ async function readRemoteJiraPayload<TResult>(
 
 export async function jiraStatus(settings: RuntimeJiraSettings): Promise<JiraConnectionStatus> {
   const target = getJiraRuntimeTarget(settings)
-  return target.kind === 'environment'
-    ? callRuntimeRpc<JiraConnectionStatus>(target, 'jira.status', undefined, { timeoutMs: 15_000 })
-    : window.api.jira.status()
+  return parseJiraConnectionStatus(
+    target.kind === 'environment'
+      ? await callRuntimeRpc<unknown>(target, 'jira.status', undefined, { timeoutMs: 15_000 })
+      : await window.api.jira.status()
+  )
 }
 
 export async function jiraConnect(
@@ -86,14 +91,11 @@ export async function jiraSelectSite(
   siteId: JiraSiteSelection
 ): Promise<JiraConnectionStatus> {
   const target = getJiraRuntimeTarget(settings)
-  return target.kind === 'environment'
-    ? callRuntimeRpc<JiraConnectionStatus>(
-        target,
-        'jira.selectSite',
-        { siteId },
-        { timeoutMs: 15_000 }
-      )
-    : window.api.jira.selectSite({ siteId })
+  return parseJiraConnectionStatus(
+    target.kind === 'environment'
+      ? await callRuntimeRpc<unknown>(target, 'jira.selectSite', { siteId }, { timeoutMs: 15_000 })
+      : await window.api.jira.selectSite({ siteId })
+  )
 }
 
 export async function jiraTestConnection(

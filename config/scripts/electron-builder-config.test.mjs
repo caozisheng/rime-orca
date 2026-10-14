@@ -1,16 +1,16 @@
 import { existsSync } from 'node:fs'
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { dirname, join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { writeMobileWebBundleFixtureTree } from './mobile-web-bundle-fixture-tree.mjs'
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..')
-const SRC_MAIN_DIR = join(REPO_ROOT, 'src', 'main')
 
 const require = createRequire(import.meta.url)
 const electronBuilderConfig = require('../electron-builder.config.cjs')
-const { FileMatcher } = require('app-builder-lib/out/fileMatcher')
+const { copyFiles, FileMatcher } = require('app-builder-lib/out/fileMatcher')
 const FpmTarget = require('app-builder-lib/out/targets/FpmTarget').default
 const electronBuilderNativeRebuild = require('./electron-builder-native-rebuild.cjs')
 
@@ -36,6 +36,7 @@ describe('electron-builder config', () => {
         '!tests{,/**/*}',
         '!examples{,/**/*}',
         '!pr-evidence{,/**/*}',
+        '!notes{,/**/*}',
         '!{.claude,.grok,.agents,.codex}{,/**/*}',
         '!Casks{,/**/*}',
         '!{AGENTS.md,CLAUDE.md,DEVELOPING.md,bundle-size-progress.md,ORCHESTRATION_IMPLEMENTATION_CHECKLIST.md,ORCHESTRATION_STRUCTURED_OUTPUT_DESIGN.md}',
@@ -43,6 +44,27 @@ describe('electron-builder config', () => {
         '!resources/plugins/launch/**'
       ])
     )
+  })
+
+  it('keeps release build staging out of app.asar while preserving runtime output', () => {
+    const matcher = new FileMatcher('/app', '/dest', (value) => value, electronBuilderConfig.files)
+    matcher.prependPattern('**/*')
+    const isPacked = matcher.createFilter()
+    expect(isPacked(join('/app', '.build'), { isDirectory: () => true })).toBe(false)
+    for (const stagingPath of [
+      '.build/release-javascript/release-javascript.tar.gz',
+      '.build/release-javascript/manifest.json',
+      '.build/release-javascript-123/out/main/index.js'
+    ]) {
+      expect(isPacked(join('/app', stagingPath), { isDirectory: () => false })).toBe(false)
+    }
+    for (const runtimePath of [
+      'out/main/index.js',
+      'out/cli/index.js',
+      'out/renderer/index.html'
+    ]) {
+      expect(isPacked(join('/app', runtimePath), { isDirectory: () => false })).toBe(true)
+    }
   })
 
   it('keeps local agent tooling out of app.asar', () => {
@@ -60,6 +82,62 @@ describe('electron-builder config', () => {
       expect(packs(toolingPath)).toBe(false)
     }
     expect(packs('out/main/index.js')).toBe(true)
+  })
+
+  it.each(['file', 'directory'])('keeps a root notes %s out of app.asar', async (kind) => {
+    const root = await mkdtemp(join(tmpdir(), 'orca-packaging-notes-'))
+    const source = join(root, 'app')
+    const destination = join(root, 'selected')
+    const runtimePaths = [
+      'package.json',
+      'out/main/index.js',
+      'out/renderer/index.html',
+      'out/cli/index.js',
+      'out/shared/index.js',
+      'out/main/notes/index.js',
+      'out/renderer/assets/notes/help.md',
+      'resources/notes/help.md',
+      'notes.txt'
+    ]
+    const notesPaths =
+      kind === 'file'
+        ? ['notes']
+        : [
+            'notes/build.log',
+            'notes/installed-orca-backup/Orca.exe',
+            'notes/installed-orca-backup/resources/app.asar',
+            'notes/orca-windows-setup.exe',
+            'notes/.recovery/state.json'
+          ]
+    try {
+      for (const fixturePath of [...runtimePaths, ...notesPaths]) {
+        const file = join(source, fixturePath)
+        await mkdir(dirname(file), { recursive: true })
+        await writeFile(file, 'synthetic fixture\n')
+      }
+      if (kind === 'directory') {
+        await mkdir(join(source, 'notes', 'empty'))
+      }
+      const matcher = new FileMatcher(
+        source,
+        destination,
+        (value) => value,
+        electronBuilderConfig.files
+      )
+      // copyFiles adds the default include and prunes excluded directories during traversal.
+      await copyFiles([matcher])
+      for (const runtimePath of runtimePaths) {
+        expect(await readFile(join(destination, runtimePath), 'utf8')).toBe('synthetic fixture\n')
+      }
+      const isPacked = matcher.createFilter()
+      for (const notesPath of new Set(['notes', ...notesPaths])) {
+        const file = join(source, notesPath)
+        expect(isPacked(file, await lstat(file)), notesPath).toBe(false)
+      }
+      expect(existsSync(join(destination, 'notes'))).toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   // Why: `files` is an all-negation list, so electron-builder's default `**/*` packs
@@ -104,6 +182,32 @@ describe('electron-builder config', () => {
     expect(packs('out/renderer/index.html')).toBe(true)
   })
 
+  // Why: an AV verdict on the bundled relay.js used to take app.asar with it as a
+  // compound object, gutting the install (#20966). resources/relay is the only copy
+  // a packaged build resolves, so the asar copy was 14MB of pure blast radius.
+  it('keeps the relay bundles out of app.asar and ships them only through extraResources', () => {
+    const matcher = new FileMatcher('/app', '/dest', (value) => value, electronBuilderConfig.files)
+    matcher.prependPattern('**/*')
+    const isPacked = matcher.createFilter()
+    const packs = (repoPath) => isPacked(join('/app', repoPath), { isDirectory: () => false })
+
+    for (const relayPath of [
+      'out/relay/linux-x64/relay.js',
+      'out/relay/win32-x64/relay.js',
+      'out/relay/darwin-arm64/relay-watcher.js',
+      'out/relay/wsl/wsl-agent-hook-relay.js'
+    ]) {
+      expect(packs(relayPath)).toBe(false)
+    }
+
+    for (const platform of ['mac', 'linux', 'win']) {
+      expect(electronBuilderConfig[platform].extraResources).toContainEqual({
+        from: 'out/relay',
+        to: 'relay'
+      })
+    }
+  })
+
   it('keeps runtime resources available through extraResources', () => {
     const bundledPluginResources = expect.objectContaining({
       from: 'resources/plugins/launch',
@@ -143,6 +247,10 @@ describe('electron-builder config', () => {
         expect.objectContaining({
           from: 'native/windows-cli-launcher/.build/orca.exe',
           to: 'bin/orca.exe'
+        }),
+        expect.objectContaining({
+          from: 'native/windows-cli-launcher/.build/orca-administrator-restart.exe',
+          to: 'bin/orca-administrator-restart.exe'
         })
       ])
     )
@@ -156,6 +264,54 @@ describe('electron-builder config', () => {
     expect(serveSimResources).toEqual([
       expect.objectContaining({ to: join('node_modules', 'serve-sim') })
     ])
+  })
+
+  it.each(['mac', 'linux'])(
+    'loads Codex TOML parsing after %s runtime pruning',
+    async (platform) => {
+      const resourcesDir = await mkdtemp(join(tmpdir(), 'orca-packaged-codex-toml-'))
+      try {
+        const resource = electronBuilderConfig[platform].extraResources.find(
+          (entry) => entry.to === join('node_modules', 'smol-toml')
+        )
+        expect(resource).toBeDefined()
+        await copyFiles([
+          new FileMatcher(resource.from, join(resourcesDir, resource.to), (value) => value)
+        ])
+        require('../packaged-runtime-node-modules.cjs').prunePackagedRuntimeNodeModules(
+          resourcesDir,
+          platform === 'mac' ? 'darwin' : 'linux',
+          process.arch
+        )
+        const stagedRequire = createRequire(join(resourcesDir, 'out', 'main', 'codex', 'trust.cjs'))
+        expect(await realpath(stagedRequire.resolve('smol-toml'))).toBe(
+          await realpath(join(resourcesDir, resource.to, 'dist', 'index.cjs'))
+        )
+        const { parse } = stagedRequire('smol-toml')
+        expect(parse('[projects."/workspace"]\ntrust_level = "trusted"\n')).toEqual({
+          projects: { '/workspace': { trust_level: 'trusted' } }
+        })
+      } finally {
+        await rm(resourcesDir, { recursive: true, force: true })
+      }
+    }
+  )
+
+  // Why: serve-sim's addon is a Mach-O, and Windows signing rejects every *.node that is not PE.
+  it('keeps serve-sim out of the Windows and Linux runtime closures', () => {
+    const {
+      PACKAGED_RUNTIME_PACKAGE_ROOTS,
+      createPackagedRuntimeNodeModuleResources
+    } = require('../packaged-runtime-node-modules.cjs')
+    expect(PACKAGED_RUNTIME_PACKAGE_ROOTS).not.toContain('serve-sim')
+    const serveSimTarget = join('node_modules', 'serve-sim')
+    expect(createPackagedRuntimeNodeModuleResources('linux').map((r) => r.to)).not.toContain(
+      serveSimTarget
+    )
+    expect(electronBuilderConfig.linux.extraResources.map((r) => r.to)).not.toContain(
+      serveSimTarget
+    )
+    expect(electronBuilderConfig.win.extraResources.map((r) => r.to)).not.toContain(serveSimTarget)
   })
 
   // Why: the Windows CLI shim is delivered only via extraResources to
@@ -230,32 +386,28 @@ describe('electron-builder config', () => {
   it('unpacks the replaceable WSL transcript filesystem process entry', async () => {
     const entryFilename = 'wsl-transcript-fs-process-entry.js'
     expect(electronBuilderConfig.asarUnpack).toContain(`out/main/${entryFilename}`)
-
-    const viteConfig = await readFile(join(REPO_ROOT, 'electron.vite.config.ts'), 'utf8')
-    expect(viteConfig).toMatch(new RegExp(`'${entryFilename.replace(/\.js$/, '')}':\\s*resolve\\(`))
   })
 
-  // Why: the scanner service is forked with ELECTRON_RUN_AS_NODE, so asar is
-  // invisible to it and a packed worker entry fails closed — dropping every
-  // OpenCode session in packaged builds while dev stays green. Three legs must
-  // agree on the filename, so all three are read rather than hardcoded.
-  it('unpacks the OpenCode SQLite worker entry the scanner service forks', async () => {
-    const spawnSource = await readFile(
-      join(SRC_MAIN_DIR, 'ai-vault', 'session-scanner-opencode-sqlite-worker-spawn.ts'),
+  // Why: the CLI runs this entry under ELECTRON_RUN_AS_NODE, which cannot read
+  // app.asar, so a packed copy sends every `orca serve` to Electron (#27307).
+  it('unpacks the orcad serve-selection entry the CLI runs', async () => {
+    const sharedSource = await readFile(
+      join(REPO_ROOT, 'src', 'shared', 'orcad-local-serve-selection.ts'),
       'utf8'
     )
-    const entryFilename = spawnSource.match(/WORKER_ENTRY_FILENAME = '([^']+)'/)?.[1]
+    const entryName = sharedSource.match(/ORCAD_LOCAL_SERVE_SELECTION_ENTRY = '([^']+)'/)?.[1]
+    expect(entryName).toBeDefined()
 
-    expect(entryFilename).toBeDefined()
-    expect(electronBuilderConfig.asarUnpack).toContain(`out/main/${entryFilename}`)
-
-    // Why: the emitted path comes from the rollup input key under
-    // entryFileNames '[name].js', not from the source filename — renaming the
-    // key alone would leave the other two legs agreeing on a file that no
-    // longer exists.
-    const viteConfig = await readFile(join(REPO_ROOT, 'electron.vite.config.ts'), 'utf8')
-    expect(viteConfig).toContain("entryFileNames: '[name].js'")
-    expect(viteConfig).toMatch(new RegExp(`'${entryFilename.replace(/\.js$/, '')}':\\s*resolve\\(`))
+    const matcher = new FileMatcher(
+      '/app',
+      '/dest',
+      (value) => value,
+      electronBuilderConfig.asarUnpack
+    )
+    const isUnpacked = matcher.createFilter()
+    expect(
+      isUnpacked(join('/app', 'out', 'main', `${entryName}.js`), { isDirectory: () => false })
+    ).toBe(true)
   })
 
   it('keeps the worker-thread hang watchdog inside app.asar', () => {
@@ -410,28 +562,6 @@ describe('electron-builder config', () => {
       )
       expect(unrecoverable).toEqual([])
     })
-
-    it('accepts exactly the markers electron-updater maps to a root-package updater', async () => {
-      const source = await readFile(
-        new URL('../../src/main/linux-update-package-type.ts', import.meta.url),
-        'utf8'
-      )
-      for (const target of linuxTargets.filter((entry) => RECOVERABLE_TARGETS.has(entry))) {
-        expect(source).toContain(`value === '${target}'`)
-      }
-    })
-
-    it('keeps the pinned FpmTarget overwrite for configured deb and rpm artifacts', async () => {
-      const source = await readFile(
-        require.resolve('app-builder-lib/out/targets/FpmTarget'),
-        'utf8'
-      )
-
-      expect(source).toContain('path.join(resourceDir, "package-type"), target')
-      for (const target of RECOVERABLE_TARGETS) {
-        expect(electronBuilderConfig[target]).toBeDefined()
-      }
-    })
   })
 })
 
@@ -442,8 +572,27 @@ describe('arch-aware packaging guard', () => {
   const OTHER_ARCH_NAME = process.arch === 'arm64' ? 'x64' : 'arm64'
   const SHERPA_PLATFORM = process.platform === 'win32' ? 'win' : process.platform
   const otherSherpa = `sherpa-onnx-${SHERPA_PLATFORM}-${OTHER_ARCH_NAME}`
+
+  // beforePack also hash-verifies the mobile web bundle, which the unit-test job never builds.
+  // Point it at a real bundle built into a temp dir: these tests are about the native-variant
+  // guard, and the bundle guard has its own suite.
+  let scratch
+  let bundleDir
+  beforeAll(async () => {
+    scratch = await mkdtemp(join(tmpdir(), 'orca-electron-builder-guard-'))
+    bundleDir = join(scratch, 'mobile-web')
+    await writeMobileWebBundleFixtureTree({ outDir: bundleDir })
+  })
+  afterAll(async () => {
+    await rm(scratch, { recursive: true, force: true })
+  })
+
   const packHost = (arch) =>
-    electronBuilderConfig.beforePack({ electronPlatformName: process.platform, arch })
+    electronBuilderConfig.beforePack(
+      { electronPlatformName: process.platform, arch },
+      bundleDir,
+      () => undefined
+    )
 
   it('allows packaging the host platform and architecture', () => {
     expect(() => packHost(HOST_ARCH)).not.toThrow()
@@ -461,22 +610,35 @@ describe('arch-aware packaging guard', () => {
       expect(() => packHost(OTHER_ARCH)).toThrow(otherSherpa)
       expect(() => packHost(OTHER_ARCH)).toThrow('pnpm install:release')
       expect(() => packHost(HOST_ARCH)).not.toThrow()
-    } else {
+    } else if (process.platform !== 'win32') {
       expect(() => packHost(OTHER_ARCH)).not.toThrow()
     }
   })
+
+  // The host's own build is the foreign-arch case: a Windows checkout compiles these for its CPU only.
+  it.runIf(process.platform === 'win32')(
+    'refuses a Windows workspace addon built for another architecture',
+    () => {
+      for (const binary of ['orca_windows_registry.node', 'orca_windows_security.node']) {
+        expect(() => packHost(OTHER_ARCH)).toThrow(`${binary} for ${OTHER_ARCH_NAME}`)
+      }
+      expect(() => packHost(HOST_ARCH)).not.toThrow()
+    }
+  )
 
   it('requires installed Windows addons for Windows packaging', () => {
     const windowsAddon = electronBuilderConfig.win.extraResources.some(
       (resource) => resource.to === join('node_modules', '@vscode', 'windows-process-tree')
     )
     const packWindows = () =>
-      electronBuilderConfig.beforePack({ electronPlatformName: 'win32', arch: 1 })
+      electronBuilderConfig.beforePack({ electronPlatformName: 'win32', arch: 1 }, bundleDir)
     if (process.platform === 'win32' || windowsAddon) {
       expect(packWindows).not.toThrow()
     } else {
       expect(packWindows).toThrow('@vscode/windows-process-tree')
       expect(packWindows).toThrow('Windows packaging requires a Windows host')
+      // A workspace link exists everywhere; only its compiled binary proves the addon will load.
+      expect(packWindows).toThrow('@orca/windows-security')
     }
   })
 })

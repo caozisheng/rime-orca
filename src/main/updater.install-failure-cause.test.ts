@@ -23,6 +23,13 @@ const {
     return appMock
   })
 
+  const appPrependListener = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+    const handlers = appEventHandlers.get(event) ?? []
+    handlers.unshift(handler)
+    appEventHandlers.set(event, handlers)
+    return appMock
+  })
+
   const on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
     const handlers = eventHandlers.get(event) ?? []
     handlers.push(handler)
@@ -39,6 +46,7 @@ const {
   const reset = () => {
     appEventHandlers.clear()
     appOn.mockClear()
+    appPrependListener.mockClear()
     eventHandlers.clear()
     on.mockClear()
     autoUpdaterMock.checkForUpdates.mockReset()
@@ -64,6 +72,7 @@ const {
       isPackaged: true,
       getVersion: vi.fn(() => '1.4.162'),
       on: appOn,
+      prependListener: appPrependListener,
       quit: vi.fn(),
       exit: vi.fn()
     },
@@ -90,7 +99,7 @@ vi.mock('./electron-updater-loader', () => ({
   loadElectronAutoUpdater: () => autoUpdaterMock
 }))
 vi.mock('@electron-toolkit/utils', () => ({ is: isMock }))
-vi.mock('./ipc/pty', () => ({ killAllPty: killAllPtyMock }))
+vi.mock('./ipc/pty/kill-all', () => ({ killAllPty: killAllPtyMock }))
 vi.mock('./updater-changelog', () => ({
   fetchChangelog: vi.fn().mockResolvedValue(null)
 }))

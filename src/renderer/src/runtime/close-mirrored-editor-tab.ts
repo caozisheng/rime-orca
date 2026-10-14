@@ -1,7 +1,5 @@
-import {
-  getRuntimeEnvironmentIdForWorktree,
-  type WorktreeRuntimeOwnerState
-} from '@/lib/worktree-runtime-owner'
+import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
+import type { WorktreeRuntimeOwnerState } from '@/lib/worktree-runtime-owner-state'
 import { recordWebSessionCloseIntent } from './web-session-close-intent'
 import { toHostSessionTabId } from '../../../shared/terminal-surface-id'
 import type { OpenFile } from '@/store/slices/editor'
@@ -27,34 +25,44 @@ export function notifyHostOfMirroredEditorClose(
   if (!file?.mirroredFromRuntimeSession) {
     return false
   }
-  const runtimeEnvironmentId = getRuntimeEnvironmentIdForWorktree(state, worktreeId)
+  // Only legacy records need catalog inference; snapshots capture their authoritative runtime owner.
+  const runtimeEnvironmentId =
+    file.runtimeEnvironmentId === undefined
+      ? getRuntimeEnvironmentIdForWorktree(state, worktreeId)
+      : file.runtimeEnvironmentId
   if (!runtimeEnvironmentId?.trim()) {
     return false
   }
   // A mirrored unified tab carries the host's tab id as `id` and the local file id as `entityId`; the host close RPC resolves by id.
-  const unifiedTab = (state.unifiedTabsByWorktree[worktreeId] ?? []).find(
+  const unifiedTabs = (state.unifiedTabsByWorktree[worktreeId] ?? []).filter(
     (tab) => tab.contentType === 'editor' && tab.entityId === fileId
   )
-  if (!unifiedTab) {
+  if (unifiedTabs.length === 0) {
     return false
   }
   // Record the close intent SYNCHRONOUSLY so a host snapshot landing before the dynamic import below resolves can't
   // flash the old-path tab back. closeWebRuntimeSessionTab re-records it idempotently.
-  recordWebSessionCloseIntent(
-    { environmentId: runtimeEnvironmentId },
-    worktreeId,
-    toHostSessionTabId(unifiedTab.id),
-    Date.now()
-  )
+  for (const tab of unifiedTabs) {
+    recordWebSessionCloseIntent(
+      { environmentId: runtimeEnvironmentId },
+      worktreeId,
+      toHostSessionTabId(tab.id),
+      Date.now()
+    )
+  }
   // Dynamic import: this helper is imported by the editor slice during store creation, so importing
   // web-runtime-session eagerly imports the store back and trips cyclic init in full-suite import order.
-  void import('./web-runtime-session').then(({ closeWebRuntimeSessionTab }) =>
-    closeWebRuntimeSessionTab({
-      worktreeId,
-      tabId: unifiedTab.id,
-      environmentId: runtimeEnvironmentId,
-      reason: 'user'
-    })
+  void import('./web-runtime-session-tab-lifecycle').then(({ closeWebRuntimeSessionTab }) =>
+    Promise.all(
+      unifiedTabs.map((tab) =>
+        closeWebRuntimeSessionTab({
+          worktreeId,
+          tabId: tab.id,
+          environmentId: runtimeEnvironmentId,
+          reason: 'user'
+        })
+      )
+    )
   )
   return true
 }

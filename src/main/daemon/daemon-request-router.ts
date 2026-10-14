@@ -1,5 +1,7 @@
 import { performance } from 'node:perf_hooks'
+import { setPtyOwnerHostColors } from '../../shared/pty-owner-color-query-colors'
 import { readCurrentProcessMacSystemResolverHealth } from '../network/macos-system-resolver-health'
+import { getMacosFullDiskAccessStatus } from '../macos-full-disk-access-status'
 import type { ConnectedDaemonClient, DaemonClientConnections } from './daemon-client-connections'
 import type { DaemonFileLog } from './daemon-file-log'
 import type { DaemonPtySpawnPreparations } from './daemon-pty-spawn-preparations'
@@ -9,6 +11,7 @@ import type { DaemonSessionBackgroundRouting } from './daemon-session-background
 import { recordDaemonStreamBacklogEvent } from './daemon-stream-backlog-probe'
 import type { DaemonStreamDataBatcher } from './daemon-stream-data-batcher'
 import type { DaemonTerminalAdmission } from './daemon-terminal-admission'
+import { ptySpawnHealthPlatformCoverage } from './daemon-health-identity'
 import type { TerminalHistorySeedTransferRegistry } from './terminal-history-seed-transfer-registry'
 import type { TerminalHost } from './terminal-host'
 import { SessionNotFoundError, type DaemonRequest } from './types'
@@ -70,6 +73,9 @@ export class DaemonRequestRouter {
         return {
           appliedSeq: this.options.host.closeStartupQueryAuthority(request.payload.sessionId)
         }
+      case 'setColorQueryReplyColors':
+        setPtyOwnerHostColors(request.payload.colors)
+        return {}
       case 'write':
         return this.write(client, request.payload.sessionId, request.payload.data)
       case 'resize':
@@ -129,6 +135,9 @@ export class DaemonRequestRouter {
       case 'clearScrollback':
         this.options.host.clearScrollback(request.payload.sessionId)
         return {}
+      case 'resetInputModes':
+        this.options.host.resetInputModes(request.payload.sessionId)
+        return {}
       case 'listSessions':
         return { sessions: this.options.host.listSessions() }
       case 'shutdownIfIdle':
@@ -147,9 +156,11 @@ export class DaemonRequestRouter {
         return { pong: true }
       case 'systemResolverHealth':
         return { health: await readCurrentProcessMacSystemResolverHealth() }
+      case 'fullDiskAccessStatus':
+        return { status: await getMacosFullDiskAccessStatus() }
       case 'ptySpawnHealth':
         await this.options.ptySpawnHealthCheck()
-        return { healthy: true }
+        return { healthy: true, coverage: ptySpawnHealthPlatformCoverage() }
       case 'shutdown':
         return this.shutdown(clientId, request.id, request.payload.killSessions)
     }

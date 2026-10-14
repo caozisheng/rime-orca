@@ -1,7 +1,7 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import { OrcaRuntimeWithCreatePtyHeadlessTerminalState } from './orca-runtime-create-pty-headless-terminal-state'
 import type { TerminalOscLinkRange } from '../../shared/terminal-osc-link-ranges'
-import type { PtyProviderBufferSnapshot } from '../providers/types'
+import type { PtyProviderBufferSnapshot } from '../providers/pty-provider-contract'
 import { withTimeout } from './runtime-async-boundaries'
 
 export class OrcaRuntimeWithSerializeTerminalBufferFromAvailableState extends OrcaRuntimeWithCreatePtyHeadlessTerminalState {
@@ -76,6 +76,7 @@ export class OrcaRuntimeWithSerializeTerminalBufferFromAvailableState extends Or
     lastTitle?: string
     source?: 'renderer'
     oscLinks?: TerminalOscLinkRange[]
+    pendingEscapeTailAnsi?: string
     kittyKeyboardFlags?: number
   } | null> {
     if (this.ptyController?.hasRendererSerializer?.(ptyId) === false) {
@@ -89,6 +90,7 @@ export class OrcaRuntimeWithSerializeTerminalBufferFromAvailableState extends Or
       cwd?: string | null
       lastTitle?: string
       oscLinks?: TerminalOscLinkRange[]
+      pendingEscapeTailAnsi?: string
       kittyKeyboardFlags?: number
     } | null = null
     try {
@@ -104,7 +106,10 @@ export class OrcaRuntimeWithSerializeTerminalBufferFromAvailableState extends Or
       ? this.preferTrackedLastTitle(ptyId, {
           ...rendererSnapshot,
           cwd: rendererSnapshot.cwd ?? this.terminalCwdByPtyId.get(ptyId),
-          source: 'renderer' as const
+          source: 'renderer' as const,
+          ...(rendererSnapshot.pendingEscapeTailAnsi
+            ? { pendingEscapeTailAnsi: rendererSnapshot.pendingEscapeTailAnsi }
+            : {})
         })
       : null
   }

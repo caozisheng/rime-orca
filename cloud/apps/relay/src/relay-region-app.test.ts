@@ -44,7 +44,9 @@ describe('Relay region API', () => {
     expect(assign).toHaveBeenCalledWith(
       { userId: 'user-1', relayHostId: 'asiahost00000001' },
       'asia-east2',
-      'asia-east2'
+      'asia-east2',
+      undefined,
+      { hostRequested: true }
     )
     expect(recordRegionRequest).toHaveBeenCalledWith('asia-east2')
     expect(recordRegionSelection).toHaveBeenCalledWith({
@@ -80,7 +82,9 @@ describe('Relay region API', () => {
     expect(assign).toHaveBeenCalledWith(
       { userId: 'user-1', relayHostId: 'killhost00000001' },
       'asia-east2',
-      'us-central1'
+      'us-central1',
+      undefined,
+      { hostRequested: true }
     )
   })
 
@@ -121,7 +125,9 @@ describe('Relay region API', () => {
     expect(assign).toHaveBeenCalledWith(
       { userId: 'user-1', relayHostId: 'abcdefghijklmnop' },
       'asia-east2',
-      'asia-east2'
+      'asia-east2',
+      undefined,
+      { hostRequested: true }
     )
     expect(exchangeRegionCorrection).toHaveBeenCalledWith(
       { userId: 'user-1', relayHostId: 'abcdefghijklmnop' },
@@ -264,6 +270,40 @@ describe('Relay region API', () => {
     )
     expect(burst.every(({ status }) => status === 200)).toBe(true)
     expect(regionCatalog).toHaveBeenCalledOnce()
+  })
+
+  it('answers a pool that cannot hand out a client with a retryable 503', async () => {
+    const regionCatalog = vi.fn(async () => {
+      throw new Error('Connection terminated due to connection timeout')
+    })
+    const app = createRelayApp(config({ publicAssignmentRetryAfterSeconds: 7 }), {
+      store: {} as never,
+      assignments: { regionCatalog } as never,
+      drain: vi.fn(),
+      ready: vi.fn(async () => true)
+    })
+
+    const response = await app.request('/v1/regions')
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('Retry-After')).toBe('7')
+    expect(await response.json()).toEqual({ error: 'region_catalog_temporarily_unavailable' })
+  })
+
+  it('still fails loudly when the region catalog breaks for a non-transient reason', async () => {
+    const regionCatalog = vi.fn(async () => {
+      throw new TypeError('broken invariant')
+    })
+    const app = createRelayApp(config(), {
+      store: {} as never,
+      assignments: { regionCatalog } as never,
+      drain: vi.fn(),
+      ready: vi.fn(async () => true)
+    })
+
+    const response = await app.request('/v1/regions')
+
+    expect(response.status).toBe(500)
   })
 })
 

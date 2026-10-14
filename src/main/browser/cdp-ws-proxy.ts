@@ -8,6 +8,8 @@ import { CdpDebuggerChannel } from './cdp-debugger-channel'
 import { CdpPageNavigationCommands } from './cdp-page-navigation-commands'
 import { CdpDomFocusReplay } from './cdp-dom-focus-replay'
 import { CdpPageCaptureCommands } from './cdp-page-capture-commands'
+import type { CapturePaintHold } from './cdp-screenshot'
+import { isTrustedCdpLoopbackRequest } from './cdp-loopback-request-guard'
 
 export class CdpWsProxy {
   private httpServer: Server | null = null
@@ -23,7 +25,10 @@ export class CdpWsProxy {
   private readonly domFocusReplay: CdpDomFocusReplay
   private readonly pageCapture: CdpPageCaptureCommands
 
-  constructor(private readonly webContents: WebContents) {
+  constructor(
+    private readonly webContents: WebContents,
+    holdPaint: CapturePaintHold
+  ) {
     this.discovery = new CdpTargetDiscovery(
       webContents,
       this.responder,
@@ -44,14 +49,24 @@ export class CdpWsProxy {
       this.debuggerChannel
     )
     this.domFocusReplay = new CdpDomFocusReplay(webContents, this.responder, this.debuggerChannel)
-    this.pageCapture = new CdpPageCaptureCommands(webContents, this.responder)
+    this.pageCapture = new CdpPageCaptureCommands(webContents, this.responder, holdPaint)
   }
 
   async start(): Promise<string> {
     await this.debuggerChannel.attachDebugger()
     return new Promise<string>((resolve, reject) => {
-      this.httpServer = createServer((req, res) => this.discovery.handleHttpRequest(req, res))
-      this.wss = new WebSocketServer({ server: this.httpServer })
+      this.httpServer = createServer((req, res) => {
+        if (!isTrustedCdpLoopbackRequest(req, this.port)) {
+          res.writeHead(403)
+          res.end()
+          return
+        }
+        this.discovery.handleHttpRequest(req, res)
+      })
+      this.wss = new WebSocketServer({
+        server: this.httpServer,
+        verifyClient: ({ req }, done) => done(isTrustedCdpLoopbackRequest(req, this.port), 403)
+      })
       const failStart = (error: Error): void => {
         this.httpServer?.removeListener('error', onListenError)
         this.wss?.close()
@@ -171,7 +186,7 @@ export class CdpWsProxy {
     }
     // Why: Page.captureScreenshot via debugger.sendCommand hangs on Electron webview guests.
     if (msg.method === 'Page.captureScreenshot') {
-      this.pageCapture.handleScreenshot(client, clientId, msg.params)
+      void this.pageCapture.handleScreenshot(client, clientId, msg.params)
       return
     }
     // Why: CDP Page.printToPDF is not available for Electron webview guests.

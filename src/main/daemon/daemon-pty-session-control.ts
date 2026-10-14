@@ -1,4 +1,4 @@
-import type { ColdRestorePayload } from './cold-restore-payload-cache'
+import { coldRestorePayloadFromInfo, type ColdRestorePayload } from './cold-restore-payload-cache'
 import { isUnknownRequestTypeError } from './daemon-endpoint-errors'
 import { GET_SIZE_PROTOCOL_VERSION } from './daemon-protocol-version'
 import { readDaemonAppliedPtySize, type DaemonAppliedPtySize } from './daemon-pty-applied-size'
@@ -9,7 +9,8 @@ import type { ColdRestoreInfo } from './history-reader'
 import { normalizeWslColdRestoreCwd } from './wsl-cold-restore-cwd'
 import { SessionNotFoundError, type ListSessionsResult } from './types'
 import { resolveSafePtyDefaultCwd } from '../providers/pty-default-cwd'
-import type { PtySpawnResult } from '../providers/types'
+import type { PtySpawnResult } from '../providers/pty-provider-contract'
+
 export const LIVENESS_PROBE_TIMEOUT_MS = 2_000
 
 const MAX_TOMBSTONES = 1000
@@ -45,6 +46,11 @@ export abstract class DaemonPtySessionControl extends DaemonPtySessionInput {
 
   hasPty(id: string): boolean {
     return this.activeSessionIds.has(id)
+  }
+
+  /** Whether a spawn of this id would cold-restore saved history (the same probe spawn uses). */
+  hasRestorableHistory(id: string): boolean {
+    return this.historyReader?.hasRestorableHistory(id) ?? false
   }
 
   async probePtyLiveness(id: string): Promise<boolean | null> {
@@ -213,21 +219,7 @@ export abstract class DaemonPtySessionControl extends DaemonPtySessionInput {
   }
 
   protected buildColdRestorePayload(restoreInfo: ColdRestoreInfo): ColdRestorePayload | null {
-    // Why: alt-screen prefers normal scrollback, else snapshotAnsi alone — not rehydrate, which starts with \x1b[?1049h that POST_REPLAY_MODE_RESET won't undo — so a hibernated TUI's last frame isn't blank on wake.
-    const scrollback = restoreInfo.modes.alternateScreen
-      ? restoreInfo.scrollbackAnsi || restoreInfo.snapshotAnsi || null
-      : restoreInfo.rehydrateSequences + restoreInfo.snapshotAnsi
-    if (!scrollback) {
-      return null
-    }
-    return {
-      scrollback,
-      cwd: restoreInfo.cwd,
-      cols: restoreInfo.cols,
-      rows: restoreInfo.rows,
-      oscLinks: restoreInfo.oscLinks,
-      ...(restoreInfo.lastTitle ? { lastTitle: restoreInfo.lastTitle } : {})
-    }
+    return coldRestorePayloadFromInfo(restoreInfo)
   }
 
   async sendSignal(id: string, signal: string): Promise<void> {

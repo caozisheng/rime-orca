@@ -5,16 +5,24 @@
 //
 // Env contract (set by the test):
 //   ORCA_SDK_CONTRACT_SCENARIO_PATH — JSON file
-//     { steps: Step[], controlResponses?: { [subtype]: <response> } } where a Step is
+//     { steps: Step[], controlResponses?: { [subtype]: <response> },
+//       controlResponseLeadingFrames?: { [subtype]: <frame>[] } } where a Step is
 //     { emit: <frame> } | { awaitUserMessage: true } | { stderr: <text> } |
-//     { awaitControlResponse: <request_id> } | { delayMs: <n> } | { exit: <code> }
+//     { awaitControlResponse: <request_id> } | { awaitFile: { path, timeoutMs } } |
+//     { delayMs: <n> } | { exit: <code> }
 //   ORCA_SDK_CONTRACT_REPORT_PATH — where argv/env observations are written
 //   ORCA_SDK_CONTRACT_IGNORE_SIGTERM — trap SIGTERM/SIGINT and outlive stdin close
 //   ORCA_SDK_CONTRACT_IGNORE_CONTROL_REQUESTS — record control requests but never answer
 //   ORCA_SDK_CONTRACT_DESCENDANT — fork an idle grandchild and report its pid
 import { spawn } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+import { setTimeout as delay } from 'node:timers/promises'
+
+if (process.argv.includes('--version')) {
+  process.stdout.write('2.1.258 (Claude Code)\n')
+  process.exit(0)
+}
 
 const scenarioPath = process.env.ORCA_SDK_CONTRACT_SCENARIO_PATH
 const reportPath = process.env.ORCA_SDK_CONTRACT_REPORT_PATH
@@ -22,6 +30,13 @@ const reportPath = process.env.ORCA_SDK_CONTRACT_REPORT_PATH
 const report = {
   argv: process.argv.slice(1),
   execPath: process.execPath,
+  cwd: process.cwd(),
+  env: Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) =>
+        key.startsWith('ORCA_') || ['HOME', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'].includes(key)
+    )
+  ),
   controlRequests: [],
   controlResponses: [],
   userMessages: [],
@@ -93,7 +108,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (process.env.ORCA_SDK_CONTRACT_IGNORE_CONTROL_REQUESTS) {
       return
     }
-    emit({
+    const response = {
       type: 'control_response',
       response: {
         subtype: 'success',
@@ -103,7 +118,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
           models: []
         }
       }
-    })
+    }
+    // Frames the CLI wrote just before its answer, in the same write: one read chunk.
+    const leading = scenario.controlResponseLeadingFrames?.[frame.request?.subtype] ?? []
+    process.stdout.write([...leading, response].map((line) => `${JSON.stringify(line)}\n`).join(''))
     return
   }
   if (frame.type === 'control_response') {
@@ -132,6 +150,14 @@ for (const step of scenario.steps) {
     await waitFor('user')
   } else if (step.awaitControlResponse !== undefined) {
     await waitFor('control_response', step.awaitControlResponse)
+  } else if (step.awaitFile) {
+    const deadline = Date.now() + step.awaitFile.timeoutMs
+    while (!existsSync(step.awaitFile.path)) {
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for test acknowledgement: ${step.awaitFile.path}`)
+      }
+      await delay(10)
+    }
   } else if (step.delayMs) {
     await new Promise((resolve) => setTimeout(resolve, step.delayMs))
   } else if (step.exit !== undefined) {

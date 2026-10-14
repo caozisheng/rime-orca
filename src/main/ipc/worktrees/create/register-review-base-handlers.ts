@@ -4,9 +4,12 @@ import { isFolderRepo } from '../../../../shared/repo-kind'
 import { gitExecFileAsync } from '../../../git/runner'
 import {
   getLocalProjectGitExecOptions,
-  getLocalProjectWorktreeGitOptions
+  getLocalProjectGhExecOptions
 } from '../../../project-runtime-git-options'
-import { getSshGitProvider } from '../../../providers/ssh-git-dispatch'
+import {
+  SSH_GIT_RECONNECT_MESSAGE,
+  SshHostNotServedError
+} from '../../../providers/ssh-host-not-served-error'
 import {
   fetchPrHeadTrackingRef,
   fetchGitHubPullRequestHeadRef
@@ -41,31 +44,21 @@ export function registerReviewBaseHandlers(context: WorktreeIpcContext): void {
         if (!repo.connectionId) {
           return gitExecFileAsync(args, getLocalProjectGitExecOptions(store, repo))
         }
-        const provider = getSshGitProvider(repo.connectionId)
-        if (!provider) {
-          throw new Error(
-            'SSH Git provider is not available. Reconnect to this target and try again.'
-          )
-        }
-        return provider.exec(args, repo.path)
+        throw new SshHostNotServedError(repo.connectionId, SSH_GIT_RECONNECT_MESSAGE)
       }
-      // Why: SSH review-head fetches require narrow write-capable RPCs.
+      const localGhOptions = repo.connectionId
+        ? repo.ghAccount
+          ? { ghAccount: repo.ghAccount }
+          : undefined
+        : getLocalProjectGhExecOptions(store, repo)
       const fetchRemoteTrackingRef = (remote: string, branch: string): Promise<void> =>
-        fetchPrHeadTrackingRef(
-          repo,
-          repo.connectionId ? getSshGitProvider(repo.connectionId) : undefined,
-          remote,
-          branch,
-          { localGitExecOptions: getLocalProjectGitExecOptions(store, repo) }
-        )
+        fetchPrHeadTrackingRef(repo, remote, branch, {
+          localGitExecOptions: getLocalProjectGitExecOptions(store, repo)
+        })
       const fetchPullRequestHeadRef = (remote: string, prNumber: number): Promise<string> =>
-        fetchGitHubPullRequestHeadRef(
-          repo,
-          repo.connectionId ? getSshGitProvider(repo.connectionId) : undefined,
-          remote,
-          prNumber,
-          { localGitExecOptions: getLocalProjectGitExecOptions(store, repo) }
-        )
+        fetchGitHubPullRequestHeadRef(repo, remote, prNumber, {
+          localGitExecOptions: getLocalProjectGitExecOptions(store, repo)
+        })
 
       return resolveGitHubPrStartPoint({
         repoPath: repo.path,
@@ -75,7 +68,7 @@ export function registerReviewBaseHandlers(context: WorktreeIpcContext): void {
         isCrossRepository: args.isCrossRepository,
         issueSourcePreference: repo.issueSourcePreference,
         connectionId: repo.connectionId ?? null,
-        localGitOptions: getLocalProjectWorktreeGitOptions(store, repo),
+        localGitOptions: localGhOptions,
         gitExec,
         fetchRemoteTrackingRef,
         fetchPullRequestHeadRef,
@@ -86,7 +79,7 @@ export function registerReviewBaseHandlers(context: WorktreeIpcContext): void {
             repoPath: repo.path,
             issueSourcePreference: repo.issueSourcePreference,
             connectionId: repo.connectionId ?? null,
-            localGitOptions: getLocalProjectWorktreeGitOptions(store, repo),
+            localGitOptions: localGhOptions,
             gitExec
           })
       })

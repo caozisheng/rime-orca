@@ -12,29 +12,13 @@ import type { PullRequestLinkedIssueMeta } from '../source-control/pull-request-
 import {
   localGitOptionsForTarget,
   type RuntimeGitCommandHost,
-  type RuntimeGitRoute,
   type RuntimeGitTarget
 } from './runtime-git-command-target'
 
 type PullRequestDraftGitExec = Parameters<typeof getPullRequestDraftContext>[0]
 
-/** Runs the PR draft-context probes on whichever host `route` resolved to. */
-export function pullRequestDraftGitExec(
-  target: RuntimeGitTarget,
-  route: RuntimeGitRoute
-): PullRequestDraftGitExec {
-  if (route.kind === 'ssh') {
-    const provider = route.provider
-    if (!provider) {
-      throw new Error('ssh_git_provider_unavailable')
-    }
-    return (argv, options) => {
-      const timeoutMs = options?.timeoutMs ?? options?.timeout
-      return timeoutMs === undefined
-        ? provider.exec(argv, target.worktree.path)
-        : provider.exec(argv, target.worktree.path, { timeoutMs })
-    }
-  }
+/** Runs the PR draft-context probes on a local target. */
+export function pullRequestDraftGitExec(target: RuntimeGitTarget): PullRequestDraftGitExec {
   return (argv, options) =>
     gitExecFileAsync(argv, {
       cwd: target.worktree.path,
@@ -48,7 +32,10 @@ export function pullRequestDraftGitExec(
 }
 
 export type RuntimeCommitMessageSettingsOverride = Partial<
-  Pick<GlobalSettings, 'commitMessageAi' | 'sourceControlAi' | 'agentCmdOverrides'>
+  Pick<
+    GlobalSettings,
+    'commitMessageAi' | 'sourceControlAi' | 'agentCmdOverrides' | 'defaultTuiAgent'
+  >
 > & {
   commitMessageDiscoveryHostKey?: string
   sourceControlAiResolvedParams?: ResolvedSourceControlAiGenerationParams

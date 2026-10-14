@@ -1,5 +1,5 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
-import { OrcaRuntimeWithAttachRemoteTerminalSourceRangeConsumer } from './orca-runtime-attach-remote-terminal-source-range-consumer'
+import { OrcaRuntimeWithNotifyRemoteTerminalViewPresenceChanged } from './orca-runtime-notify-remote-terminal-view-presence-changed'
 import type { TerminalOscLinkRange } from '../../shared/terminal-osc-link-ranges'
 import type { HeadlessSeedMetadata } from './runtime-terminal-state-records'
 import {
@@ -8,7 +8,7 @@ import {
   restoredTerminalTailSeedAllowed
 } from './terminal-tail-restore-seed'
 
-export class OrcaRuntimeWithSerializeMainTerminalBuffer extends OrcaRuntimeWithAttachRemoteTerminalSourceRangeConsumer {
+export class OrcaRuntimeWithSerializeMainTerminalBuffer extends OrcaRuntimeWithNotifyRemoteTerminalViewPresenceChanged {
   serializeMainTerminalBuffer(
     ptyId: string,
     opts: { scrollbackRows?: number } = {}
@@ -24,6 +24,7 @@ export class OrcaRuntimeWithSerializeMainTerminalBuffer extends OrcaRuntimeWithA
     oscLinks?: TerminalOscLinkRange[]
     alternateScreen?: boolean
     scrollbackAnsi?: string
+    pendingEscapeTailAnsi?: string
     terminalOwner?: 'shell'
   } | null> {
     return this.serializeHeadlessTerminalBuffer(ptyId, { ...opts, includeEmpty: true })
@@ -77,6 +78,16 @@ export class OrcaRuntimeWithSerializeMainTerminalBuffer extends OrcaRuntimeWithA
     await this.ptyController?.clearBuffer?.(leaf.ptyId)
     await this.clearHeadlessTerminalBuffer(leaf.ptyId)
     return { handle, cleared: true }
+  }
+
+  async resetTerminalInputModes(handle: string): Promise<{ handle: string; reset: boolean }> {
+    const leaf = this.resolveLeafForHandle(handle)
+    if (!leaf?.ptyId) {
+      throw new Error('terminal_not_found')
+    }
+    await this.ptyController?.resetInputModes?.(leaf.ptyId)
+    await this.resetHeadlessTerminalInputModes(leaf.ptyId)
+    return { handle, reset: true }
   }
 
   getTerminalSize(ptyId: string): { cols: number; rows: number } | null {
@@ -134,15 +145,24 @@ export class OrcaRuntimeWithSerializeMainTerminalBuffer extends OrcaRuntimeWithA
     this.recordRecentPtyOutputForPathProvenance(ptyId, data)
     state.writeChain = state.writeChain
       .then(async () => {
+        if (this.headlessTerminals.get(ptyId) !== state) {
+          return
+        }
         // Why: seed writes never set forwardQueryReplies — the main-side
         // replay guard. A snapshot containing old queries must answer no one.
         await state.emulator.write(data)
+        if (this.headlessTerminals.get(ptyId) !== state) {
+          return
+        }
         // Why AFTER the seed write: the snapshot payload cannot carry kitty
         // pushes (rehydrateSequences deliberately omits them), but ordering
         // behind it keeps the parse deterministic. Unflagged like the seed —
         // re-applying flags must answer no one.
         if (typeof metadata.kittyKeyboardFlags === 'number') {
           await state.emulator.applyKittyKeyboardFlags(metadata.kittyKeyboardFlags)
+          if (this.headlessTerminals.get(ptyId) !== state) {
+            return
+          }
         }
         if (metadata.cwd !== undefined) {
           state.emulator.setCwd(metadata.cwd)

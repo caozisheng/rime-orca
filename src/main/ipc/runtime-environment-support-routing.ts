@@ -1,23 +1,28 @@
+import { isOrchestrationMutation } from '../../shared/orchestration-rpc-contract'
 import { waitForPromiseWithSignal } from '../../shared/abort-signal-reason'
-import type { PairingOffer } from '../../shared/pairing'
+import type { PairedRuntimeConnection } from '../../shared/paired-runtime-connection'
 import type {
   RuntimeOrchestrationEnvelope,
   RuntimeRpcResponse
 } from '../../shared/runtime-rpc-envelope'
 import type { KnownRuntimeEnvironment } from '../../shared/runtime-environments'
-import { getPreferredPairingOffer } from '../../shared/runtime-environments'
+import { getPreferredPairedRuntimeConnection } from '../../shared/runtime-environments'
 import { markEnvironmentUsed, resolveEnvironment } from '../../shared/runtime-environment-store'
-import { ELECTRON_REMOTE_RUNTIME_CLIENT_CAPABILITIES } from '../../shared/protocol-version'
+import { recordRuntimeEnvironmentUsage } from './runtime-environment-usage-record'
+import { ELECTRON_REMOTE_RUNTIME_CLIENT_CAPABILITIES } from '../../shared/electron-remote-runtime-client-capabilities'
 import {
   subscribeRemoteRuntimeRequest,
   type RemoteRuntimeSubscription
 } from '../../shared/remote-runtime-client'
-import { withRemoteRuntimeTailscaleHint } from '../../shared/remote-runtime-tailscale-hint'
+import { withRuntimeUnreachableHint } from './runtime-environment-unreachable-hint'
 import {
   isRuntimeEnvironmentCapabilityOutcomeCurrent,
   type RuntimeEnvironmentCapabilityOutcome
 } from './runtime-environment-capability-evidence'
-import { runtimeEnvironmentRevisionFailure } from './runtime-environment-revision-guard'
+import {
+  runtimeEnvironmentChangedFailure,
+  runtimeEnvironmentRevisionFailure
+} from './runtime-environment-revision-guard'
 import { supportsSharedControl } from './runtime-environment-shared-control-support'
 import {
   sendRemoteRuntimeRequestAbortable,
@@ -27,7 +32,7 @@ import { subscribeRemoteRuntimeSharedControlRequest } from './runtime-environmen
 
 type SupportRoute = {
   environment: KnownRuntimeEnvironment
-  pairing: PairingOffer
+  connection: PairedRuntimeConnection
   outcome: Exclude<RuntimeEnvironmentCapabilityOutcome, { kind: 'stale_incarnation' }>
 }
 
@@ -83,7 +88,7 @@ export function executeSupportRoutedCall(args: {
     supported: (route) =>
       sendRemoteRuntimeSharedControlRequestAbortable(
         route.environment.id,
-        route.pairing,
+        route.connection,
         args.method,
         args.params,
         args.timeoutMs,
@@ -92,7 +97,7 @@ export function executeSupportRoutedCall(args: {
       ),
     unsupported: (route) =>
       sendRemoteRuntimeRequestAbortable(
-        route.pairing,
+        route.connection,
         args.method,
         args.params,
         args.timeoutMs,
@@ -118,6 +123,7 @@ export async function subscribeSupportRoutedRuntimeEnvironment(args: {
   timeoutMs: number
   callbacks: SubscriptionCallbacks
   isCurrent: () => boolean
+  signal?: AbortSignal
 }): Promise<RemoteRuntimeSubscription> {
   let markedUsed = false
   let supportOutcome: SupportRoute['outcome'] | null = null
@@ -137,26 +143,28 @@ export async function subscribeSupportRoutedRuntimeEnvironment(args: {
     environment: args.environment,
     timeoutMs: args.timeoutMs,
     isCurrent: args.isCurrent,
+    signal: args.signal,
     supported: (route) => {
       supportOutcome = route.outcome
       return subscribeRemoteRuntimeSharedControlRequest(
         args.environment.id,
-        route.pairing,
+        route.connection,
         args.method,
         args.params,
         args.timeoutMs,
-        callbacks
+        callbacks,
+        args.signal
       )
     },
     unsupported: (route) => {
       supportOutcome = route.outcome
       return subscribeRemoteRuntimeRequest(
-        route.pairing,
+        route.connection,
         args.method,
         args.params,
         args.timeoutMs,
         callbacks,
-        { clientCapabilities: ELECTRON_REMOTE_RUNTIME_CLIENT_CAPABILITIES }
+        { clientCapabilities: ELECTRON_REMOTE_RUNTIME_CLIENT_CAPABILITIES, signal: args.signal }
       )
     }
   })
@@ -184,16 +192,16 @@ export async function routeRuntimeEnvironmentCallBySupport(args: {
     if (revisionFailure) {
       return revisionFailure
     }
-    const pairing = getPreferredPairingOffer(environment)
+    const connection = getPreferredPairedRuntimeConnection(environment)
     const outcome = await waitForPromiseWithSignal(
-      supportsSharedControl(args.userDataPath, environment, pairing, args.timeoutMs),
+      supportsSharedControl(args.userDataPath, environment, connection, args.timeoutMs),
       args.signal
     )
     if (
       outcome.kind !== 'stale_incarnation' &&
       isRuntimeEnvironmentCapabilityOutcomeCurrent(outcome)
     ) {
-      const route = { environment, pairing, outcome }
+      const route = { environment, connection, outcome }
       const response = await (outcome.kind === 'supported'
         ? args.supported(route)
         : args.unsupported(route))
@@ -212,15 +220,14 @@ export async function routeRuntimeEnvironmentSubscriptionBySupport<TSubscription
   environment: KnownRuntimeEnvironment
   timeoutMs: number
   isCurrent: () => boolean
+  signal?: AbortSignal
   supported: (route: SupportRoute) => Promise<TSubscription>
   unsupported: (route: SupportRoute) => Promise<TSubscription>
 }): Promise<{ subscription: TSubscription; outcome: SupportRoute['outcome'] }> {
-  const pairing = getPreferredPairingOffer(args.environment)
-  const outcome = await supportsSharedControl(
-    args.userDataPath,
-    args.environment,
-    pairing,
-    args.timeoutMs
+  const connection = getPreferredPairedRuntimeConnection(args.environment)
+  const outcome = await waitForPromiseWithSignal(
+    supportsSharedControl(args.userDataPath, args.environment, connection, args.timeoutMs),
+    args.signal
   )
   if (
     outcome.kind === 'stale_incarnation' ||
@@ -229,26 +236,11 @@ export async function routeRuntimeEnvironmentSubscriptionBySupport<TSubscription
   ) {
     throw new Error('Runtime environment pairing changed; refresh and try again')
   }
-  const route = { environment: args.environment, pairing, outcome }
+  const route = { environment: args.environment, connection, outcome }
   const subscription = await (outcome.kind === 'supported'
     ? args.supported(route)
     : args.unsupported(route))
   return { subscription, outcome }
-}
-
-function runtimeEnvironmentChangedFailure(
-  environment: KnownRuntimeEnvironment,
-  method: string
-): RuntimeRpcResponse<never> {
-  return {
-    id: method,
-    ok: false,
-    error: {
-      code: 'runtime_environment_changed',
-      message: 'Runtime environment pairing changed; refresh and try again'
-    },
-    _meta: { runtimeId: environment.runtimeId }
-  }
 }
 
 function subscriptionCallbacks(
@@ -258,11 +250,11 @@ function subscriptionCallbacks(
   >,
   shouldMarkUsed: () => boolean
 ) {
-  const pairing = getPreferredPairingOffer(args.environment)
+  const connection = getPreferredPairedRuntimeConnection(args.environment)
   return {
     onResponse: (response: RuntimeRpcResponse<unknown>) => {
       if (response.ok && shouldMarkUsed()) {
-        markEnvironmentUsed(args.userDataPath, args.environment.id, {
+        recordRuntimeEnvironmentUsage(args.userDataPath, args.environment.id, {
           runtimeId: response._meta.runtimeId
         })
       }
@@ -274,11 +266,21 @@ function subscriptionCallbacks(
       args.callbacks.onEvent({
         type: 'error' as const,
         code: error.code,
-        message: withRemoteRuntimeTailscaleHint(error.message, pairing.endpoint)
+        message: withRuntimeUnreachableHint(args.environment, error.message, connection.endpoint)
       }),
     onClose: () => {
       args.callbacks.onEvent({ type: 'close' as const })
       args.callbacks.onClose()
     }
   }
+}
+
+export function shouldUseSharedControlEnvelope(
+  method: string,
+  params: unknown,
+  envelope: RuntimeOrchestrationEnvelope | undefined
+): RuntimeOrchestrationEnvelope | undefined {
+  return envelope && method.startsWith('orchestration.') && !isOrchestrationMutation(method, params)
+    ? envelope
+    : undefined
 }

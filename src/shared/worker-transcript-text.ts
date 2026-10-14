@@ -6,10 +6,12 @@
  * copied: two renderings would let the two surfaces disagree about what a tool call looked like.
  */
 
+import { claimBackgroundTaskTwins } from './native-chat-background-task-row'
 import {
   isSubagentGroupFallbackText,
   subagentGroupFallbackText
 } from './native-chat-subagent-summary'
+import { subagentFallbackText } from './native-chat-subagent-items'
 import type { NativeChatMessage } from './native-chat-types'
 
 export function formatWorkerTranscriptMessage(message: NativeChatMessage): string {
@@ -20,9 +22,16 @@ export function formatWorkerTranscriptMessage(message: NativeChatMessage): strin
   // every fallback-shaped text block as soon as any group is present and draws
   // each group, so it never has to decide which twin belongs to which group.
   const standIns = claimSubagentGroupTwins(message.blocks)
+  // A background task's row is the same shape: one block, one frozen twin. Its
+  // twin is matched on exact text rather than by shape, because the sentence is
+  // often the provider's own and has none.
+  const taskTwins = claimBackgroundTaskTwins(message.blocks)
   const blocks = message.blocks.map((block, index) => {
     if (block.type === 'text') {
       return block.text
+    }
+    if (block.type === 'background-task') {
+      return taskTwins.unpairedRows.get(index) ?? null
     }
     if (block.type === 'tool-call') {
       return `[tool ${block.name}] ${safeJson(block.input)}`
@@ -35,6 +44,12 @@ export function formatWorkerTranscriptMessage(message: NativeChatMessage): strin
     }
     if (block.type === 'subagent-group') {
       return standIns.get(index) ?? null
+    }
+    if (block.type === 'subagent') {
+      // A subagent's own row is its block and its twin, nothing else.
+      return message.blocks.some((other) => other.type === 'text')
+        ? null
+        : `[subagents] ${subagentFallbackText(block)}`
     }
     // The journal deliberately admits block types this build does not know, and
     // a newer remote host can send one over the wire. Degrade to a marker rather

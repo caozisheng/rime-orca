@@ -138,29 +138,22 @@ describe('RuntimeBrowserCommands browser screencast', () => {
     browserSessionRegistryMock.createProfile.mockReset()
   })
 
-  it('creates profiles with the requested user-agent mode', async () => {
+  it('creates profiles with the requested scope and label', async () => {
     const { RuntimeBrowserCommands } = await import('./orca-runtime-browser')
     const profile = {
       id: 'profile-google',
       scope: 'isolated',
       partition: 'persist:orca-browser-session-profile-google',
       label: 'Google',
-      source: null,
-      userAgentMode: 'native'
+      source: null
     }
     browserSessionRegistryMock.createProfile.mockReturnValue(profile)
     const commands = new RuntimeBrowserCommands(createHost())
 
     await expect(
-      commands.browserProfileCreate({
-        label: 'Google',
-        scope: 'isolated',
-        userAgentMode: 'native'
-      })
+      commands.browserProfileCreate({ label: 'Google', scope: 'isolated' })
     ).resolves.toEqual({ profile })
-    expect(browserSessionRegistryMock.createProfile).toHaveBeenCalledWith('isolated', 'Google', {
-      userAgentMode: 'native'
-    })
+    expect(browserSessionRegistryMock.createProfile).toHaveBeenCalledWith('isolated', 'Google')
   })
 
   it('waits for explicit worktree browser registration after requesting a hidden mount', async () => {
@@ -638,7 +631,11 @@ describe('RuntimeBrowserCommands browser screencast', () => {
 
   it('fans one page screencast out to multiple subscribers', async () => {
     const { RuntimeBrowserCommands } = await import('./orca-runtime-browser')
-    webContentsFromIdMock.mockReturnValue({ isDestroyed: () => false })
+    webContentsFromIdMock.mockReturnValue({
+      isDestroyed: () => false,
+      setBackgroundThrottling: vi.fn(),
+      capturePage: vi.fn(async () => null)
+    })
     const done = deferred<void>()
     const stop = vi.fn(() => done.resolve())
     const updateViewport = vi.fn(async () => {})
@@ -672,8 +669,8 @@ describe('RuntimeBrowserCommands browser screencast', () => {
     expect(first.subscriptionId).not.toBe(second.subscriptionId)
     const frame = new Uint8Array([1, 2, 3])
     expect(startBrowserScreencastMock.mock.calls[0][1].onFrame(frame)).toBe(true)
-    expect(firstSend).toHaveBeenCalledWith(frame)
-    expect(secondSend).toHaveBeenCalledWith(frame)
+    expect(firstSend).toHaveBeenCalledWith(frame, { dropWhenBacklogged: true })
+    expect(secondSend).toHaveBeenCalledWith(frame, { dropWhenBacklogged: true })
     expect(updateViewport).toHaveBeenLastCalledWith(
       expect.objectContaining({ viewportWidth: 800, viewportHeight: 600 })
     )
@@ -687,7 +684,11 @@ describe('RuntimeBrowserCommands browser screencast', () => {
 
   it('admits screencast frames through the paired-runtime size guard', async () => {
     const { RuntimeBrowserCommands } = await import('./orca-runtime-browser')
-    webContentsFromIdMock.mockReturnValue({ isDestroyed: () => false })
+    webContentsFromIdMock.mockReturnValue({
+      isDestroyed: () => false,
+      setBackgroundThrottling: vi.fn(),
+      capturePage: vi.fn(async () => null)
+    })
     const done = deferred<void>()
     startBrowserScreencastMock.mockResolvedValue({
       stop: vi.fn(() => done.resolve()),

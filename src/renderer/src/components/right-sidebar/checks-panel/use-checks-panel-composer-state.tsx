@@ -44,6 +44,7 @@ type ChecksPanelComposerStateInput = Pick<
     | 'setAgentComposerState'
     | 'setCreatePrError'
     | 'ownerSettings'
+    | 'ownerTarget'
     | 'pendingCommentResolutionRef'
     | 'claimedCommentResolutionRef'
     | 'commentResolutionLaunchAcceptedRef'
@@ -85,6 +86,7 @@ export function useChecksPanelComposerState(model: ChecksPanelComposerStateInput
     setCreatePrError,
     sourceControlAiActionsVisible,
     ownerSettings,
+    ownerTarget,
     pendingCommentResolutionRef,
     claimedCommentResolutionRef,
     commentResolutionLaunchAcceptedRef,
@@ -100,6 +102,7 @@ export function useChecksPanelComposerState(model: ChecksPanelComposerStateInput
     setBody: setPrBody,
     draft: prDraft,
     setDraft: setPrDraft,
+    fieldsAreSeedPlaceholders: prFieldsAreSeedPlaceholders,
     stackedCreationSupported: prStackedCreationSupported,
     repoDefaultBaseRef: prRepoDefaultBaseRef,
     baseQuery: prBaseQuery,
@@ -125,6 +128,7 @@ export function useChecksPanelComposerState(model: ChecksPanelComposerStateInput
     eligibility: hostedReviewCreation,
     repo,
     settings: ownerSettings,
+    target: ownerTarget,
     submitting: isCreatingPr,
     prCreationDefaults,
     sourceControlAiActionsVisible,
@@ -137,9 +141,7 @@ export function useChecksPanelComposerState(model: ChecksPanelComposerStateInput
       seed: activePullRequestGenerationRecord?.seed ?? null,
       seedFieldRevisions: activePullRequestGenerationRecord?.seedFieldRevisions ?? null,
       onSeedRestored: handlePullRequestGenerationSeedRestored,
-      onGenerate: (fields, fieldRevisions, overrides) => {
-        void handleGeneratePullRequestFieldsForActive(fields, fieldRevisions, overrides)
-      },
+      onGenerate: handleGeneratePullRequestFieldsForActive,
       onCancelGenerate: handleCancelGeneratePullRequestFieldsForActive
     }
   })
@@ -261,6 +263,7 @@ export function useChecksPanelComposerState(model: ChecksPanelComposerStateInput
     setPrBody,
     prDraft,
     setPrDraft,
+    prFieldsAreSeedPlaceholders,
     prStackedCreationSupported,
     prRepoDefaultBaseRef,
     prBaseQuery,

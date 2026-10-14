@@ -5,6 +5,7 @@ import {
   isDetachedHeadWorkspace,
   isSleepingSweepExemptWorkspace
 } from '@/components/sidebar/visible-worktrees'
+import { getStructuredChatWorktreeIds } from '@/components/sidebar/visible-worktree-activity-inputs'
 import { isDefaultBranchWorkspace } from '@/components/sidebar/default-branch-workspace'
 import { sortWorktreesSmart } from '@/components/sidebar/smart-sort'
 import { buildWorktreeChecksReviewIndex } from '@/components/cmd-j/worktree-checks-review-index'
@@ -21,22 +22,11 @@ import {
   isWorkspaceFromOtherDevice
 } from '@/components/sidebar/workspace-creator-visibility'
 import type { Worktree } from '../../../shared/worktree/types'
+import { parseWorkspaceKey } from '../../../shared/workspace-scope'
 import { EMPTY_SORTED_WORKTREES } from './worktree-jump-palette-model'
-import type { WorktreeJumpPaletteFilter } from './use-worktree-jump-palette-filter'
-import type { WorktreeJumpPaletteLocalState } from './use-worktree-jump-palette-local-state'
-import type { WorktreeJumpPaletteStoreState } from './use-worktree-jump-palette-store-state'
 import { buildWorktreeJumpPaletteDocumentIndex } from './worktree-jump-palette-document-index'
 import { buildWorktreeJumpPaletteWorktreeMaps } from './worktree-jump-palette-worktree-maps'
-import type { PaletteSearchContext } from '@/lib/palette-match/palette-ranking'
-
-type WorktreeJumpPaletteWorktreesInput = WorktreeJumpPaletteStoreState &
-  Pick<
-    WorktreeJumpPaletteFilter,
-    'filterPredicate' | 'repoMap' | 'repoByHostIdentity' | 'hostOptions' | 'hostFilterActive'
-  > &
-  Pick<WorktreeJumpPaletteLocalState, 'paletteSearchQuery'> & {
-    paletteSearchContext: PaletteSearchContext
-  }
+import type { WorktreeJumpPaletteWorktreesInput } from './worktree-jump-palette-worktrees-input'
 
 export function useWorktreeJumpPaletteWorktrees({
   paletteSearchQuery,
@@ -45,7 +35,7 @@ export function useWorktreeJumpPaletteWorktrees({
   worktreesByRepo,
   agentStatusByPaneKey,
   tabsByWorktree,
-  allWorktrees,
+  workspaces,
   filterPredicate,
   hideDefaultBranchWorkspace,
   hideAutomationGeneratedWorkspaces,
@@ -56,6 +46,7 @@ export function useWorktreeJumpPaletteWorktrees({
   alwaysShowDefaultBranchWorkspace,
   ptyIdsByTabId,
   browserTabsByWorktree,
+  unifiedTabsByWorktree,
   activeWorktreeId,
   activeWorkspaceExecutionHostId,
   runtimeEnvironments,
@@ -94,16 +85,33 @@ export function useWorktreeJumpPaletteWorktrees({
         : EMPTY_PAIRED_DEVICE_IDS_BY_ENVIRONMENT,
     [hideWorkspacesFromOtherDevices, runtimeEnvironments, runtimeStatusByEnvironmentId]
   )
+  const worktreeIdsWithStructuredChat = getStructuredChatWorktreeIds(
+    showSleepingWorkspaces,
+    unifiedTabsByWorktree
+  )
   const emptyQueryVisibleWorktrees = useMemo(
     () =>
-      allWorktrees.filter((worktree) => {
+      workspaces.filter((worktree) => {
         if (worktree.isArchived) {
           return false
         }
         if (filterPredicate && !filterPredicate.matchesWorktree(worktree)) {
           return false
         }
-        if (hideDefaultBranchWorkspace && isDefaultBranchWorkspace(worktree)) {
+        if (
+          hideWorkspacesFromOtherDevices &&
+          isWorkspaceFromOtherDevice(worktree, pairedDeviceIdsByEnvironment)
+        ) {
+          return false
+        }
+        // Folder rows follow the sidebar's host/device scope, without git or sleeping filters.
+        if (parseWorkspaceKey(worktree.id)?.type === 'folder') {
+          return true
+        }
+        if (
+          hideDefaultBranchWorkspace &&
+          isDefaultBranchWorkspace(worktree, repoMap.get(worktree.repoId))
+        ) {
           return false
         }
         if (hideAutomationGeneratedWorkspaces && isAutomationGeneratedWorkspace(worktree)) {
@@ -116,12 +124,6 @@ export function useWorktreeJumpPaletteWorktrees({
           return false
         }
         if (
-          hideWorkspacesFromOtherDevices &&
-          isWorkspaceFromOtherDevice(worktree, pairedDeviceIdsByEnvironment)
-        ) {
-          return false
-        }
-        if (
           !showSleepingWorkspaces &&
           !isSleepingSweepExemptWorkspace(worktree, alwaysShowDefaultBranchWorkspace) &&
           isInactiveWorkspace(
@@ -129,7 +131,8 @@ export function useWorktreeJumpPaletteWorktrees({
             tabsByWorktree,
             ptyIdsByTabId,
             browserTabsByWorktree,
-            worktreeIdsWithLiveAgent
+            worktreeIdsWithLiveAgent,
+            worktreeIdsWithStructuredChat
           )
         ) {
           return false
@@ -137,7 +140,7 @@ export function useWorktreeJumpPaletteWorktrees({
         return true
       }),
     [
-      allWorktrees,
+      workspaces,
       alwaysShowDefaultBranchWorkspace,
       browserTabsByWorktree,
       filterPredicate,
@@ -148,9 +151,11 @@ export function useWorktreeJumpPaletteWorktrees({
       hideWorkspacesFromOtherDevices,
       pairedDeviceIdsByEnvironment,
       ptyIdsByTabId,
+      repoMap,
       showSleepingWorkspaces,
       tabsByWorktree,
-      worktreeIdsWithLiveAgent
+      worktreeIdsWithLiveAgent,
+      worktreeIdsWithStructuredChat
     ]
   )
   const { visibleWorktreesForState, switchableWorktreesForRows } = useMemo(
@@ -171,18 +176,16 @@ export function useWorktreeJumpPaletteWorktrees({
   const searchScopeWorktrees = useMemo(() => {
     const scope = getWorktreePaletteSearchScope({
       hasQuery,
-      allWorktrees,
+      allWorktrees: workspaces,
       emptyQueryWorktrees: switchableWorktreesForRows
     })
     return hasQuery && filterPredicate ? scope.filter(filterPredicate.matchesWorktree) : scope
-  }, [allWorktrees, filterPredicate, hasQuery, switchableWorktreesForRows])
+  }, [workspaces, filterPredicate, hasQuery, switchableWorktreesForRows])
   const browserSortedWorktrees = useMemo(() => {
     if (!paletteStatusInputsActive) {
       return EMPTY_SORTED_WORKTREES
     }
-    const scope = filterPredicate
-      ? allWorktrees.filter(filterPredicate.matchesWorktree)
-      : allWorktrees
+    const scope = filterPredicate ? workspaces.filter(filterPredicate.matchesWorktree) : workspaces
     return sortWorktreesSmart(
       scope,
       tabsByWorktree,
@@ -195,7 +198,7 @@ export function useWorktreeJumpPaletteWorktrees({
     )
   }, [
     paletteStatusInputsActive,
-    allWorktrees,
+    workspaces,
     filterPredicate,
     tabsByWorktree,
     repoMap,
@@ -229,18 +232,18 @@ export function useWorktreeJumpPaletteWorktrees({
   const checksReviewByWorktree = useMemo(
     () =>
       buildWorktreeChecksReviewIndex({
-        worktrees: allWorktrees,
+        worktrees: workspaces,
         repoByHostIdentity,
         prCache,
         hostedReviewCache,
         settings
       }),
-    [allWorktrees, hostedReviewCache, prCache, repoByHostIdentity, settings]
+    [workspaces, hostedReviewCache, prCache, repoByHostIdentity, settings]
   )
   const worktreeDocuments = useMemo(
     () =>
       buildWorktreeJumpPaletteDocumentIndex({
-        worktrees: allWorktrees,
+        worktrees: workspaces,
         repoMap,
         repoByHostIdentity,
         hostOptions,
@@ -251,7 +254,7 @@ export function useWorktreeJumpPaletteWorktrees({
         checksReviewByWorktree
       }),
     [
-      allWorktrees,
+      workspaces,
       checksReviewByWorktree,
       hostFilterActive,
       hostOptions,

@@ -6,11 +6,11 @@ import type {
   IPtyProvider,
   PtyBackgroundStreamEvent,
   PtyDataEvent,
-  PtyProviderBufferSnapshot,
   PtyProcessInfo,
+  PtyProviderBufferSnapshot,
   PtySpawnOptions,
   PtySpawnResult
-} from '../providers/types'
+} from '../providers/pty-provider-contract'
 import {
   adoptOwningProvider,
   attachDaemonOwnedSession,
@@ -26,7 +26,8 @@ export class DegradedDaemonPtyProvider implements IPtyProvider {
 
   private current: DaemonPtyAdapter
   private legacy: DaemonPtyAdapter[]
-  private fallback: IPtyProvider
+  /** Runs terminals in this process, so they die with it. */
+  readonly fallback: IPtyProvider
   private sessionProviders = new Map<string, IPtyProvider>()
   private freshSpawns: DegradedDaemonFreshSpawnRouter
   private ownerRecovery: DegradedDaemonOwnerRecovery
@@ -168,10 +169,14 @@ export class DegradedDaemonPtyProvider implements IPtyProvider {
   }
 
   clearBuffer = (id: string): Promise<void> => this.providerFor(id).clearBuffer(id)
+  resetInputModes = (id: string): Promise<void> => this.providerFor(id).resetInputModes(id)
 
   async closeStartupQueryAuthority(id: string): Promise<number> {
     return (await this.providerFor(id).closeStartupQueryAuthority?.(id)) ?? 0
   }
+
+  setColorQueryReplyColors: IPtyProvider['setColorQueryReplyColors'] = (colors) =>
+    this.allProviders().forEach((provider) => provider.setColorQueryReplyColors?.(colors))
 
   acknowledgeDataEvent(id: string, charCount: number): void {
     this.providerFor(id).acknowledgeDataEvent(id, charCount)
@@ -306,12 +311,14 @@ export class DegradedDaemonPtyProvider implements IPtyProvider {
     return shutdownDegradedFallbackSessions(this.sessionProviders, this.fallback)
   }
 
-  getCurrentDaemonSessionIds(): string[] {
-    return listProviderSessionIds(this.sessionProviders, this.current)
+  /** Sessions routed to the preserved daemon, or to the local fallback a restart also ends. */
+  getSessionIdsRoutedTo(route: 'current-daemon' | 'fallback'): string[] {
+    const target = route === 'fallback' ? this.fallback : this.current
+    return listProviderSessionIds(this.sessionProviders, target)
   }
 
   fanoutCurrentDaemonSyntheticExits(code: number): void {
-    for (const id of this.getCurrentDaemonSessionIds()) {
+    for (const id of this.getSessionIdsRoutedTo('current-daemon')) {
       this.sessionProviders.delete(id)
       // Why: restart kills listed sessions even when the adapter did not track them active.
       // oxlint-disable-next-line unicorn/no-useless-spread -- copy-safe: listeners may unsubscribe during iteration

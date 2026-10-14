@@ -2,23 +2,16 @@ import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
 import { useAppStore } from '@/store'
 import type { AiVaultSession } from '../../../../shared/ai-vault-types'
-import type { AgentSessionHandleProvider } from '../../../../shared/agent-session-provider-handle'
+import type { CliConversationAdoptingAgent } from '../../../../shared/structured-agent-cli-conversation-adoption'
 import { hasRuntimeRpcErrorCode } from '../../../../shared/runtime-rpc-error-code'
-import { parseWorkspaceKey } from '../../../../shared/workspace-scope'
 import { prepareAiVaultSessionForResume } from '@/lib/ai-vault-session-resume-preparation'
 import { adoptAgentSessionLaunchVerdict } from '@/lib/agent-session-launch-plan'
-import {
-  activateAndRevealFolderWorkspace,
-  activateAndRevealWorktree
-} from '@/lib/worktree-activation'
+import type { AgentLaunchRequestId } from '@/lib/agent-launch-request-id'
+import { activateAndRevealWorkspace } from '@/lib/worktree-activation'
+import { beginStructuredAgentSessionProvisionalLaunch } from '@/lib/structured-agent-session-provisional-tab'
 
-export function activateAiVaultResumeWorkspace(workspaceId: string): void {
-  const workspaceScope = parseWorkspaceKey(workspaceId)
-  if (workspaceScope?.type === 'folder') {
-    activateAndRevealFolderWorkspace(workspaceScope.folderWorkspaceId)
-    return
-  }
-  activateAndRevealWorktree(workspaceId)
+export function activateAiVaultResumeWorkspace(workspaceId: string): boolean {
+  return activateAndRevealWorkspace(workspaceId) !== false
 }
 
 /** Adopt a vault conversation into a new structured chat. The route was decided by the
@@ -27,29 +20,37 @@ export function activateAiVaultResumeWorkspace(workspaceId: string): void {
  *  would hide the refusal the user needs to see. */
 export async function resumeAiVaultSessionInNewChat(
   session: AiVaultSession,
-  agent: AgentSessionHandleProvider,
-  worktreeId: string
+  agent: CliConversationAdoptingAgent,
+  worktreeId: string,
+  requestId: AgentLaunchRequestId
 ): Promise<void> {
   try {
     // Codex rows can live under a shared legacy home; the same preparation the terminal resume
     // runs re-pins them, and its result is what names the conversation the host will look for.
     const preparedSession = await prepareAiVaultSessionForResume(session)
-    const settlement = await adoptAgentSessionLaunchVerdict({
+    const plan = adoptAgentSessionLaunchVerdict({
       route: 'structured-native-chat',
+      requestId,
       agent,
       worktreeId,
       resumeFrom: { providerSessionId: preparedSession.sessionId }
-    }).launch({})
-    if (settlement?.kind === 'failed') {
-      notifyAiVaultSessionResumeInChatFailure(settlement.error)
-      return
-    }
-    // Why: an unknown outcome is not a failure; the launch layer reconciles it on the next attempt.
-    if (settlement?.kind !== 'structured') {
-      return
-    }
-    if (useAppStore.getState().activeWorktreeId !== worktreeId) {
-      activateAiVaultResumeWorkspace(worktreeId)
+    })
+    const launch = beginStructuredAgentSessionProvisionalLaunch({
+      plan,
+      hooks: {},
+      beforeOpen: () => {
+        if (useAppStore.getState().activeWorktreeId !== worktreeId) {
+          return activateAiVaultResumeWorkspace(worktreeId)
+        }
+        return true
+      }
+    })
+    if (launch) {
+      void launch.settlement.then((settlement) => {
+        if (settlement.kind === 'failed' && !settlement.notified) {
+          notifyAiVaultSessionResumeInChatFailure(settlement.error)
+        }
+      })
     }
   } catch (error) {
     notifyAiVaultSessionResumeInChatFailure(error)

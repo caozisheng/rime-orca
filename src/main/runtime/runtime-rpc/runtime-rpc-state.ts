@@ -7,8 +7,11 @@ import type { RpcTransport } from '../rpc/transport'
 import type { WebSocket } from 'ws'
 import type { DeviceRegistry } from '../device-registry'
 import type { E2EEKeypair } from '../e2ee-keypair'
+import type { RuntimeHostDescriptor } from '../../../shared/runtime-host-descriptor'
 import type { UnpairedDeviceAuthThrottle } from '../rpc/unpaired-device-auth-throttle'
 import type { MobileSocketWiring } from '../rpc/mobile-socket-wiring'
+import type { MobileDesktopRelay } from '../mobile-desktop-relay/mobile-desktop-relay'
+import type { MobileRelayHostCatalog } from '../mobile-desktop-relay/mobile-relay-host-catalog'
 import { RelayRevokeOutbox } from '../relay/relay-revoke-outbox'
 import { PushUnregisterOutbox } from '../push/push-unregister-outbox'
 import { RuntimeBinaryMessageRouter } from '../runtime-binary-message-router'
@@ -60,6 +63,7 @@ export class RuntimeRpcState {
   protected readonly pushUnregisterOutbox: PushUnregisterOutbox
   protected deviceRegistry: DeviceRegistry | null = null
   protected e2eeKeypair: E2EEKeypair | null = null
+  protected hostDescriptor: RuntimeHostDescriptor | null = null
   protected pairingInitializationFailure: PairingOfferUnavailable | null = null
   protected tlsFingerprint: string | null = null
   protected activeTransports: RpcTransport[] = []
@@ -70,6 +74,11 @@ export class RuntimeRpcState {
   // transports under the SAME wiring (see ensureMobileSocketWiring) instead of orphaning relay sockets.
   protected detachWebSocketWiring: (() => void) | null = null
   protected mobileRelayPairingProvider: MobileRelayPairingProvider | null = null
+  // Why nullable: launch sets both for every runtime process; in-process test servers may not.
+  protected mobileDesktopRelay: MobileDesktopRelay | null = null
+  protected mobileRelayHostCatalog: MobileRelayHostCatalog | null = null
+  // Why: lets an automatic mint install a provider whose launch-time construction failed.
+  protected mobileRelayPairingProviderInstaller: (() => Promise<unknown>) | null = null
   protected mobileRelayPairingOfferQueue: Promise<void> = Promise.resolve()
   protected mobileRelayPairingOfferInFlight: {
     generation: number
@@ -91,6 +100,8 @@ export class RuntimeRpcState {
   protected activeAskLongPolls = 0
   protected activeBrowserHostLongPolls = 0
   protected readonly activeBrowserHostLongPollsByDevice = new Map<string, number>()
+  protected clientRequestsInFlight = 0
+  protected lastClientRequestAt = Date.now()
 
   constructor({
     runtime,
@@ -133,5 +144,15 @@ export class RuntimeRpcState {
     this.relayRevokeOutbox = new RelayRevokeOutbox(userDataPath)
     this.pushUnregisterOutbox = new PushUnregisterOutbox(userDataPath)
     this.runtime.configureNotificationDismissalStore(userDataPath)
+  }
+
+  /** Counts a client message for idle exit, from receipt until its dispatch settles. */
+  protected trackClientRequest<T>(work: () => Promise<T>): Promise<T> {
+    this.clientRequestsInFlight += 1
+    this.lastClientRequestAt = Date.now()
+    return work().finally(() => {
+      this.clientRequestsInFlight -= 1
+      this.lastClientRequestAt = Date.now()
+    })
   }
 }

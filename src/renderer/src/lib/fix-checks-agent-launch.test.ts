@@ -97,7 +97,7 @@ vi.mock('@/lib/new-workspace', () => ({
   CLIENT_PLATFORM: 'win32'
 }))
 
-vi.mock('@/lib/source-control-launch-agent-selection', () => ({
+vi.mock('../../../shared/source-control-launch-agent-selection', () => ({
   pickSourceControlLaunchAgent: mocks.pickSourceControlLaunchAgent,
   readSourceControlLaunchRecipeAgentId: mocks.readSourceControlLaunchRecipeAgentId
 }))
@@ -144,7 +144,12 @@ describe('startFixChecksAgent', () => {
     mocks.activateAndRevealWorktree.mockReturnValue(true)
     mocks.findGithubPrWorkspaceAttachment.mockReturnValue(null)
     mocks.getConnectionId.mockReturnValue(null)
-    mocks.launchAgentInNewTab.mockReturnValue({ tabId: 'tab-1' })
+    mocks.launchAgentInNewTab.mockImplementation(
+      (args: { beforeSurfaceOpen?: (surface: { kind: 'local-terminal' }) => boolean | void }) => {
+        args.beforeSurfaceOpen?.({ kind: 'local-terminal' })
+        return { surface: { kind: 'local-terminal', tabId: 'tab-1' } }
+      }
+    )
     mocks.launchWorkItemDirect.mockResolvedValue(true)
     mocks.pickSourceControlLaunchAgent.mockImplementation(({ detectedAgents }) => {
       return detectedAgents.includes('codex') ? 'codex' : null
@@ -208,6 +213,7 @@ describe('startFixChecksAgent', () => {
   })
 
   it('rejects without launching when remote agent detection fails', async () => {
+    mocks.store.repos = [{ ...mocks.store.repos[0], connectionId: 'conn-1' }]
     mocks.getConnectionId.mockReturnValue('conn-1')
     mocks.store.ensureRemoteDetectedAgents.mockRejectedValue(new Error('detection failed'))
     const { startFixChecksAgent } = await import('./fix-checks-agent-launch')

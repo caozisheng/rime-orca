@@ -1,8 +1,10 @@
+import { paneIdentity } from './runtime-terminal-pane-identity'
 import type { CreateWorktreeResult } from '../../shared/worktree/create-types'
 import type { Repo } from '../../shared/repo-types'
 import type { TuiAgent } from '../../shared/tui-agent'
 import type { Worktree } from '../../shared/worktree/types'
 import type { WorktreeStartupLaunch } from '../../shared/worktree/launch-types'
+import type { AgentLaunchRuntime } from '../../shared/agent-launch-runtime'
 import { createSequencedSetupAgentCommands } from '../../shared/setup-agent-sequencing'
 import { getSetupRunnerCommandPlatformForPath } from '../../shared/setup-runner-command'
 import type { RuntimeTerminalCreate } from '../../shared/runtime-types'
@@ -19,7 +21,7 @@ import type {
 
 type Ports = {
   canSpawn: boolean
-  markTrusted: (agent: TuiAgent, path: string) => Promise<void>
+  provisionInBackground?: () => boolean
   createTerminal: (
     selector: string,
     options: TerminalCreateOptions
@@ -32,9 +34,10 @@ type Ports = {
   activate: (
     repoId: string,
     worktreeId: string,
-    setup?: CreateWorktreeResult['setup'],
     startup?: WorktreeStartupLaunch,
-    defaultTabs?: CreateWorktreeResult['defaultTabs']
+    // Only work main tried to start and failed; the host window retries it where the user sees it.
+    failedSetup?: CreateWorktreeResult['setup'],
+    failedDefaultTabs?: CreateWorktreeResult['defaultTabs']
   ) => void
 }
 
@@ -58,6 +61,8 @@ export async function startRuntimeLocalWorktreeTerminals(args: {
   defaultTabs?: CreateWorktreeResult['defaultTabs']
   startup?: WorktreeStartupLaunch
   startupFollowup?: WorktreeStartupFollowup
+  /** What a host-built startup was quoted for, or the repair error it fails with. */
+  startupLaunchRuntime?: AgentLaunchRuntime | Error
   createdWithAgent?: TuiAgent
   draftPaste?: WorktreeStartupDraftPaste
   warning?: string
@@ -93,16 +98,18 @@ export async function startRuntimeLocalWorktreeTerminals(args: {
 
   if (sequencedStartup && ports.canSpawn) {
     try {
-      const trustAgent = args.draftPaste?.agent ?? args.createdWithAgent
-      if (trustAgent) {
-        await ports.markTrusted(trustAgent, worktree.path)
+      if (args.startupLaunchRuntime instanceof Error) {
+        throw args.startupLaunchRuntime
       }
       const terminal = await ports.createTerminal(`id:${worktree.id}`, {
         command: sequencedStartup.command,
+        ...(request.startupCwd ? { cwd: request.startupCwd } : {}),
+        ...paneIdentity(request.startupPaneKey),
         ...(setup && startup ? { claudeAgentTeamsSourceCommand: startup.command } : {}),
         env: sequencedStartup.env,
         ...(sequencedStartup.launchConfig ? { launchConfig: sequencedStartup.launchConfig } : {}),
         ...(args.createdWithAgent ? { launchAgent: args.createdWithAgent } : {}),
+        ...(args.startupLaunchRuntime ? { launchRuntime: args.startupLaunchRuntime } : {}),
         ...(sequencedStartup.viewMode ? { viewMode: sequencedStartup.viewMode } : {}),
         startupCommandDelivery: sequencedStartup.startupCommandDelivery,
         telemetry: sequencedStartup.telemetry,
@@ -125,29 +132,41 @@ export async function startRuntimeLocalWorktreeTerminals(args: {
   }
 
   if (shouldActivate) {
-    const runtimeWillProvision = didSpawnStartup && Boolean(setup || defaultTabs)
-    if (runtimeWillProvision) {
-      const provisioned = await ports.provision(
-        provisionArgs(args, startupTerminalHandle, didSpawnStartup, wrappedSetupCommand)
-      )
-      didSpawnSetup = provisioned.setupSpawned
-      setupTerminalHandle = provisioned.setupTerminalHandle
-    }
-    const activationSetup = didSpawnSetup
-      ? undefined
-      : setup
-        ? {
+    const provisionInBackground = ports.provisionInBackground?.() === true
+    // Why: a failed agent start hands the whole create to the window, which seeds the agent's tab
+    // first and lays setup and default tabs around it; main provisioning first would leave it no tab.
+    const agentStartFailed = Boolean(sequencedStartup && ports.canSpawn && !didSpawnStartup)
+    if (agentStartFailed && !provisionInBackground) {
+      ports.activate(repo.id, worktree.id, startup, setup, defaultTabs)
+    } else {
+      let failedSetup: CreateWorktreeResult['setup']
+      // Why: main alone creates the setup and default tabs; the window draws them from the reveals.
+      if (ports.canSpawn && (provisionInBackground || setup || defaultTabs)) {
+        const provisioned = await ports.provision({
+          ...provisionArgs(
+            args,
+            startupTerminalHandle,
+            didSpawnStartup,
+            didSpawnStartup ? wrappedSetupCommand : undefined
+          ),
+          ...(provisionInBackground ? { surfaceOwner: false as const } : {})
+        })
+        didSpawnSetup = provisioned.setupSpawned
+        setupTerminalHandle = provisioned.setupTerminalHandle
+        if (setup && !didSpawnSetup) {
+          failedSetup = {
             ...setup,
             ...(didSpawnStartup && wrappedSetupCommand ? { command: wrappedSetupCommand } : {})
           }
-        : undefined
-    ports.activate(
-      repo.id,
-      worktree.id,
-      activationSetup,
-      startup && !didSpawnStartup ? startup : undefined,
-      runtimeWillProvision ? undefined : defaultTabs
-    )
+        }
+      }
+      ports.activate(
+        repo.id,
+        worktree.id,
+        startup && !didSpawnStartup ? startup : undefined,
+        failedSetup
+      )
+    }
   } else if (ports.canSpawn && (setup || defaultTabs || didSpawnStartup)) {
     const provisioning = ports.provision({
       ...provisionArgs(args, startupTerminalHandle, didSpawnStartup, wrappedSetupCommand),
@@ -205,6 +224,7 @@ function provisionArgs(
     ...(args.defaultTabs ? { defaultTabs: args.defaultTabs } : {}),
     primaryTerminalHandle,
     hasStartupTerminal,
+    ...(args.request.setupOnly !== undefined ? { setupOnly: args.request.setupOnly } : {}),
     setupCommandPlatform: setupPlatform(args.setup, 'posix'),
     observeSetupCompletion: args.request.observeSetupCompletion,
     ...(wrappedSetupCommand ? { wrappedSetupCommand } : {})

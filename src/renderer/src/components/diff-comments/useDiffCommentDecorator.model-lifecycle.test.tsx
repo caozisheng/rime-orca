@@ -3,6 +3,8 @@ import { renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { editor as MonacoEditor } from 'monaco-editor'
 
+vi.mock('monaco-editor', () => import('monaco-editor/esm/vs/editor/editor.api.js'))
+
 const storeFixture = vi.hoisted(() => ({
   activeGroupIdByWorktree: {},
   clearDeliveredDiffComments: vi.fn()
@@ -36,10 +38,13 @@ describe('useDiffCommentDecorator model lifecycle', () => {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: a partial stand-in for Monaco's ICodeEditor; useDiffCommentDecorator calls only the members defined here, and a real editor needs a laid-out DOM this suite does not build.
     const editor = {
       getDomNode: () => editorDomNode,
+      getContainerDomNode: () => editorDomNode,
       getOption: () => 19,
+      createDecorationsCollection: () => ({ set: () => {}, clear: () => {} }),
       onMouseMove: () => ({ dispose: disposeMouseMove }),
       onMouseLeave: () => ({ dispose: disposeMouseLeave }),
       onDidScrollChange: () => ({ dispose: disposeScroll }),
+      onDidDispose: () => ({ dispose: () => {} }),
       changeViewZones: (callback: (accessor: MonacoEditor.IViewZoneChangeAccessor) => void) =>
         callback(viewZoneAccessor)
     } as unknown as MonacoEditor.ICodeEditor

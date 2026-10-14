@@ -102,7 +102,7 @@ async function createWindowsDefaultShellTerminalTab(
     await state.updateSettings({ terminalWindowsShell: selectedShell })
     const terminal = store.getState().createTab(worktreeId)
     store.getState().setActiveTab(terminal.id)
-    store.getState().setActiveTabType('terminal')
+    store.getState().setActiveTabType('terminal', store.getState().activeWorktreeId)
     return terminal.id
   }, shell)
 
@@ -140,9 +140,13 @@ async function configureActiveProjectWslRuntime(page: Page): Promise<string | nu
 
     // Why: WSL is selected through project/runtime preferences now; the global
     // Windows default shell setting only represents host shells.
-    await state.updateProject(activeProject.id, {
-      localWindowsRuntimePreference: { kind: 'wsl', distro: wslDistro }
-    })
+    await state.updateProject(
+      activeProject.id,
+      {
+        localWindowsRuntimePreference: { kind: 'wsl', distro: wslDistro }
+      },
+      'local'
+    )
     return wslDistro
   })
 }
@@ -164,7 +168,7 @@ async function createWindowsProjectRuntimeTerminalTab(
 
     const terminal = store.getState().createTab(worktreeId)
     store.getState().setActiveTab(terminal.id)
-    store.getState().setActiveTabType('terminal')
+    store.getState().setActiveTabType('terminal', store.getState().activeWorktreeId)
     return terminal.id
   })
 

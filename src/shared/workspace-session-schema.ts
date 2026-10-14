@@ -38,6 +38,7 @@ import {
   workspaceVisibleTabTypeSchema
 } from './workspace-session-tab-type-schema'
 import { salvagedField, salvagedOptional, salvagingArray, salvagingRecord } from './zod-salvage'
+import { isStructuredAgentId } from './agent-session-provider-handle-encoding'
 
 // ─── Terminal pane layout (recursive) ───────────────────────────────
 
@@ -49,7 +50,7 @@ const workspaceKeySchema = z.custom<WorkspaceKey>(
 // Why: z.lazy + type annotation keeps the recursive inference working without
 // forcing zod to resolve the whole tree at definition time. Discriminated on `type` because a
 // plain union re-tries the leaf branch for every split node of every restored terminal layout.
-const terminalPaneLayoutNodeSchema: z.ZodType<TerminalPaneLayoutNode> = z.lazy(() =>
+export const terminalPaneLayoutNodeSchema: z.ZodType<TerminalPaneLayoutNode> = z.lazy(() =>
   z.discriminatedUnion('type', [
     z.object({
       type: z.literal('leaf'),
@@ -71,6 +72,7 @@ const terminalLayoutSnapshotSchema = z.object({
   root: terminalPaneLayoutNodeSchema.nullable(),
   activeLeafId: z.string().nullable(),
   expandedLeafId: z.string().nullable(),
+  chatLeafId: z.string().optional(),
   ptyIdsByLeafId: salvagedOptional('ptyIdsByLeafId', leafStringsSchema),
   buffersByLeafId: salvagedOptional('buffersByLeafId', leafStringsSchema),
   scrollbackRefsByLeafId: salvagedOptional('scrollbackRefsByLeafId', leafStringsSchema),
@@ -79,7 +81,7 @@ const terminalLayoutSnapshotSchema = z.object({
 
 // ─── Terminal tab (legacy) ──────────────────────────────────────────
 
-const terminalTabSchema = z.object({
+export const terminalTabSchema = z.object({
   id: terminalTabIdSchema,
   ptyId: z.string().nullable(),
   worktreeId: z.string(),
@@ -132,10 +134,14 @@ const tabSchema = z.object({
   worktreeId: z.string(),
   executionHostId: executionHostIdSchema.optional(),
   contentType: tabContentTypeSchema,
-  agentSessionAgent: z.enum(['codex', 'claude']).optional().catch(undefined),
-  // Why: a structured terminal tab must recover its durable host session after
-  // restart; omitting this additive field silently routes it back through PTY.
-  structuredSessionId: z.string().min(1).optional().catch(undefined),
+  // Why: any agent a host registered, as the host published it. An id that is not an agent slug
+  // degrades to absent, which renders no chat, rather than failing the whole-session parse; a
+  // build that predates an agent reads its tab the same way.
+  agentSessionAgent: z
+    .string()
+    .refine((value) => isStructuredAgentId(value))
+    .optional()
+    .catch(undefined),
   label: z.string(),
   generatedLabel: z.string().nullable().optional(),
   aiVaultTitle: z
@@ -212,6 +218,12 @@ export const workspaceSessionStateSchema: z.ZodType<WorkspaceSessionState> = z.o
     'terminalLayoutsByTabId',
     salvagingRecord(terminalTabIdSchema, terminalLayoutSnapshotSchema),
     () => ({})
+  ),
+  // Client-local park scrollback; see WorkspaceSessionState.localOnlyScrollbackByTabId for why it is
+  // not a field on the layout snapshot. Optional so an older profile simply carries none.
+  localOnlyScrollbackByTabId: salvagedOptional(
+    'localOnlyScrollbackByTabId',
+    salvagingRecord(terminalTabIdSchema, leafStringsSchema)
   ),
   activeWorktreeIdsOnShutdown: salvagedOptional(
     'activeWorktreeIdsOnShutdown',

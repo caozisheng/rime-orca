@@ -28,7 +28,6 @@ const repairedEntries = [
   ['zh', 'auto.components.github.IssueSourceSelector.643d7e9496'],
   ['zh', 'auto.components.sparse.SparseCheckoutPresetSelect.ddbcaef7be'],
   ['zh', 'auto.components.sidebar.AddRepoCreateStep.0ae45b8238'],
-  ['zh', 'auto.components.settings.AutoRenameBranchFromWorkSetting.800edb1e54'],
   ['zh', 'auto.components.settings.AutoRenameBranchPromptEditor.ebb942a2ec'],
   ['zh', 'auto.components.settings.BaseRefPicker.915ad97875'],
   ['zh', 'auto.components.settings.IntegrationsPane.e74de656ce'],
@@ -47,7 +46,6 @@ const repairedEntries = [
   ['zh', 'auto.components.feature.wall.WorkbenchAnimatedVisual.4371cc9931'],
   ['zh', 'auto.components.feature.wall.ReviewAnimatedVisual.8df4d52b68'],
   ['zh', 'auto.components.editor.CombinedDiffViewer.8368d256ec'],
-  ['zh', 'auto.components.editor.IpynbViewer.8c3b21369a'],
   ['zh', 'auto.components.editor.MarkdownTemplatePicker.22cd94426f']
 ] as const
 
@@ -64,7 +62,7 @@ function readValue(catalog: Record<string, unknown>, key: string): unknown {
 
 describe('technical literal catalog repairs (#13121)', () => {
   it('keeps every repaired value identical to English', () => {
-    expect(repairedEntries).toHaveLength(43)
+    expect(repairedEntries).toHaveLength(41)
 
     for (const [locale, key] of repairedEntries) {
       expect(readValue(catalogs[locale], key), `${locale}:${key}`).toBe(readValue(en, key))

@@ -30,6 +30,8 @@ type GitHubRepositoryQueryCommandName =
   | 'listRepoLabels'
   | 'listRepoAssignableUsers'
   | 'getGitHubRateLimit'
+  | 'listGitHubBindableAccounts'
+  | 'validateGitHubAccountBinding'
 
 export type RuntimeRepositoryCommandSurface = {
   listProjects: RuntimeProjectHostSetupController['listProjects']
@@ -38,6 +40,7 @@ export type RuntimeRepositoryCommandSurface = {
   createProjectHostSetup: RuntimeProjectHostSetupController['createSetup']
   setupProjectExistingFolder: RuntimeProjectHostSetupController['setupExistingFolder']
   setupProjectClone: RuntimeProjectHostSetupController['setupClone']
+  addSshRepo: RuntimeProjectHostSetupController['addSshRepo']
   updateProjectHostSetup: RuntimeProjectHostSetupController['updateSetup']
   deleteProjectHostSetup: RuntimeProjectHostSetupController['deleteSetup']
   listProjectGroups: RuntimeProjectGroupController['listGroups']
@@ -113,6 +116,7 @@ export function installRuntimeRepositoryCommandSurface(
     createProjectHostSetup: host.createSetup.bind(host),
     setupProjectExistingFolder: host.setupExistingFolder.bind(host),
     setupProjectClone: host.setupClone.bind(host),
+    addSshRepo: host.addSshRepo.bind(host),
     updateProjectHostSetup: host.updateSetup.bind(host),
     deleteProjectHostSetup: host.deleteSetup.bind(host),
     listProjectGroups: groups.listGroups.bind(groups),
@@ -156,6 +160,8 @@ export function installRuntimeRepositoryCommandSurface(
     listRepoLabels: queries.listRepoLabels.bind(queries),
     listRepoAssignableUsers: queries.listRepoAssignableUsers.bind(queries),
     getGitHubRateLimit: queries.getGitHubRateLimit.bind(queries),
+    listGitHubBindableAccounts: queries.listGitHubBindableAccounts.bind(queries),
+    validateGitHubAccountBinding: queries.validateGitHubAccountBinding.bind(queries),
     getRepoHooks: hooks.getRepoHooks.bind(hooks),
     checkRepoHooks: hooks.checkRepoHooks.bind(hooks),
     inspectRepoSetupScriptImports: hooks.inspectRepoSetupScriptImports.bind(hooks),

@@ -1,12 +1,14 @@
 import type { TaskPageLinearCollectionEffectsModel } from './use-task-page-linear-collection-effects'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import {
   getSingleJiraProjectScope,
   getTaskPageJiraStatusOrderScopeKey,
   loadTaskPageJiraProjectStatusOrder
 } from '@/components/task-page-jira-status-order'
 import { createTaskPageJiraLoadFailureState } from '@/components/task-page-jira-load-state'
+import { searchTaskPageJiraIssues } from '@/components/task-page-jira-search'
 import { JIRA_ITEM_LIMIT, TASK_SEARCH_DEBOUNCE_MS } from './task-page-source-context'
+import { defaultScopeSource } from '@/lib/default-creation-host'
 export function useTaskPageJiraListEffects(model: TaskPageLinearCollectionEffectsModel) {
   const {
     settings,
@@ -28,6 +30,7 @@ export function useTaskPageJiraListEffects(model: TaskPageLinearCollectionEffect
     setJiraLoading,
     setJiraError,
     setJiraErrorDetailsOpen,
+    setJiraJqlRejection,
     jiraSearchInput,
     appliedJiraSearch,
     setAppliedJiraSearch,
@@ -57,6 +60,7 @@ export function useTaskPageJiraListEffects(model: TaskPageLinearCollectionEffect
       jiraQuery: appliedJiraSearch.trim()
     })
   }, [appliedJiraSearch, setTaskResumeState, taskResumeApplied, jiraSearchPersistReadyRef])
+  const previousJiraRefreshNonceRef = useRef(jiraRefreshNonce)
   useEffect(() => {
     if (!taskResumeApplied) {
       return
@@ -67,25 +71,33 @@ export function useTaskPageJiraListEffects(model: TaskPageLinearCollectionEffect
     if (!jiraConnected) {
       return
     }
+    const force = previousJiraRefreshNonceRef.current !== jiraRefreshNonce
+    previousJiraRefreshNonceRef.current = jiraRefreshNonce
     let cancelled = false
     setJiraLoading(true)
     setJiraError(null)
+    setJiraJqlRejection(null)
     setJiraErrorDetailsOpen(false)
     const trimmed = appliedJiraSearch.trim()
     const request =
       trimmed.length > 0
-        ? searchJiraIssues(trimmed, JIRA_ITEM_LIMIT, {
-            sourceContext: jiraTaskSourceContext
-          })
+        ? searchTaskPageJiraIssues(trimmed, (jql) =>
+            searchJiraIssues(jql, JIRA_ITEM_LIMIT, {
+              sourceContext: jiraTaskSourceContext,
+              force
+            })
+          )
         : listJiraIssues(activeJiraPreset, JIRA_ITEM_LIMIT, {
-            sourceContext: jiraTaskSourceContext
-          })
+            sourceContext: jiraTaskSourceContext,
+            force
+          }).then((issues) => ({ issues, jqlRejection: null }))
     void request
-      .then((issues) => {
+      .then(({ issues, jqlRejection }) => {
         if (cancelled) {
           return
         }
         setJiraIssues(issues)
+        setJiraJqlRejection(jqlRejection)
         setJiraLoading(false)
         const projectScope = getSingleJiraProjectScope(issues)
         if (!projectScope) {
@@ -96,7 +108,7 @@ export function useTaskPageJiraListEffects(model: TaskPageLinearCollectionEffect
           projectScope
         )
         void loadTaskPageJiraProjectStatusOrder(
-          jiraTaskSourceContext ?? settings,
+          jiraTaskSourceContext ?? defaultScopeSource(settings),
           jiraTaskSourceScopeKey,
           projectScope
         ).then((order) => {

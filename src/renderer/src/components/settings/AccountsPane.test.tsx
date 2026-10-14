@@ -6,6 +6,7 @@ import type { GlobalSettings } from '../../../../shared/global-settings-types'
 import { i18n } from '../../i18n/i18n'
 import { useAppStore } from '../../store'
 import { AccountsPane } from './AccountsPane'
+import { resolveSettingsHostScope } from './settings-host-scope'
 
 function renderPane(
   settings: GlobalSettings,
@@ -15,6 +16,13 @@ function renderPane(
     React.createElement(AccountsPane, {
       settings,
       updateSettings: vi.fn(),
+      // Why: mirrors the page before the user picks a host — the default host setting.
+      hostScope: resolveSettingsHostScope({
+        choice: null,
+        defaultEnvironmentId: settings.activeRuntimeEnvironmentId,
+        savedEnvironmentIds: [],
+        catalogHydrated: false
+      }),
       ...props
     })
   )
@@ -166,5 +174,14 @@ describe('AccountsPane', () => {
     expect(
       markup.slice(markup.lastIndexOf('<button', addAccountIndex), addAccountIndex)
     ).not.toContain('disabled=""')
+  })
+
+  it('tells users to paste the OpenCode console session cookie, not auth alone', () => {
+    const markup = renderPane(getDefaultSettings('/tmp'))
+
+    expect(markup).toContain('__Host-console_session')
+    expect(markup).toContain('auth=…; __Host-console_session=…')
+    expect(markup).toContain('auth cookie still covers workspace discovery')
+    expect(markup).not.toContain('Fe26.2**… token or auth=Fe26.2**… header')
   })
 })

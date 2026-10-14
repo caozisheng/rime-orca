@@ -10,6 +10,10 @@ import {
   structuredAdoptionConflictError,
   type StructuredAgentSessionAdoptionOwnership
 } from './structured-agent-session-history-adoption'
+import {
+  claudeProviderHandle,
+  codexProviderHandle
+} from '../../shared/agent-session-provider-handle-encoding'
 
 const OPERATION = '1800000000000-00000000000000000000000000000001'
 
@@ -30,7 +34,7 @@ function committedReplay(overrides: { callerKey?: string; operationId?: string }
           origin: 'adopted',
           mintedAtFence: 1,
           observedAt: 1_800_000_000_000,
-          handle: { provider: 'codex', threadId: 'thread-1' }
+          handle: codexProviderHandle('thread-1')
         }
       ],
       accountHome: { variable: 'CODEX_HOME', path: '/home/dev/.codex-original' }
@@ -113,7 +117,7 @@ describe('findCommittedStructuredAgentSessionAdoptionReplay', () => {
   it('returns the record-pinned account and adopted handle for the exact committed operation', () => {
     expect(committedReplay()).toMatchObject({
       record: { accountHome: { path: '/home/dev/.codex-original' } },
-      providerHandle: { kind: 'codex', threadId: 'thread-1' }
+      providerHandle: codexProviderHandle('thread-1')
     })
   })
 
@@ -128,11 +132,7 @@ describe('findCommittedStructuredAgentSessionAdoptionReplay', () => {
     record.providerHandleChain[0] = {
       ...record.providerHandleChain[0]!,
       origin: 'adopted',
-      handle: {
-        provider: 'claude',
-        sessionId: 'provider-session-alpha-1',
-        leafUuid: 'leaf-1'
-      }
+      handle: claudeProviderHandle('provider-session-alpha-1', 'leaf-1')
     }
 
     expect(
@@ -156,11 +156,7 @@ describe('findCommittedStructuredAgentSessionAdoptionReplay', () => {
         ]
       })
     ).toMatchObject({
-      providerHandle: {
-        kind: 'claude',
-        sessionId: 'provider-session-alpha-1',
-        leafUuid: 'leaf-1'
-      }
+      providerHandle: claudeProviderHandle('provider-session-alpha-1', 'leaf-1')
     })
   })
 })
@@ -193,10 +189,11 @@ describe('resolveStructuredAgentSessionAdoption', () => {
 
     await expect(
       resolveStructuredAgentSessionAdoption({
-        agent: 'codex',
         providerSessionId: 'thread-1',
         candidateAccountHomes: ['/home/dev/.orca-codex', '/home/dev/.codex', '/never/probed'],
-        resolveTranscript
+        resolveTranscript,
+        launchEnv: {},
+        workspaceCwd: '/repo'
       })
     ).resolves.toEqual({
       accountHomePath: '/home/dev/.codex',
@@ -210,10 +207,11 @@ describe('resolveStructuredAgentSessionAdoption', () => {
 
     await expect(
       resolveStructuredAgentSessionAdoption({
-        agent: 'claude',
         providerSessionId: 'session-1',
         candidateAccountHomes: ['', '   ', '/home/dev/.claude', ' /home/dev/.claude ', ''],
-        resolveTranscript
+        resolveTranscript,
+        launchEnv: {},
+        workspaceCwd: '/repo'
       })
     ).rejects.toThrow('agent_session_identity_required')
     expect(resolveTranscript.mock.calls.map(([args]) => args.accountHomePath)).toEqual([
@@ -225,10 +223,11 @@ describe('resolveStructuredAgentSessionAdoption', () => {
     // A resume under the wrong home lands in a blank chat wearing the old chat's name.
     await expect(
       resolveStructuredAgentSessionAdoption({
-        agent: 'claude',
         providerSessionId: 'session-1',
         candidateAccountHomes: ['/home/dev/.claude-work', '/home/dev/.claude'],
-        resolveTranscript: async () => null
+        resolveTranscript: async () => null,
+        launchEnv: {},
+        workspaceCwd: '/repo'
       })
     ).rejects.toThrow('agent_session_identity_required')
   })

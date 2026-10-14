@@ -120,6 +120,20 @@ describe('command aliases dispatch to the canonical handler', () => {
     )
   })
 
+  it('says the checkout is still being deleted when the host accepted a background removal', async () => {
+    queueFixtures(
+      callMock,
+      okFixture('req_show', { worktree: { hostId: 'local' } }),
+      okFixture('req', { removed: true, removing: true })
+    )
+
+    await main(['worktree', 'rm', '--worktree', 'id:wt-1'], '/tmp/repo')
+
+    expect(logSpy).toHaveBeenCalledWith(
+      'removed: true\nOrca is still deleting the checkout in the background.'
+    )
+  })
+
   it('fails closed when worktree removal cannot resolve a host', async () => {
     queueFixtures(callMock, okFixture('req_show', { worktree: { id: 'wt-1' } }))
     const priorExitCode = process.exitCode
@@ -296,6 +310,39 @@ describe('unknown command surfaces a suggestion', () => {
     expect(stderr).toContain('orca worktree')
   })
 
+  it.each([
+    ['orchestration resume', 'orchestration reset'],
+    ['artifacts deset', 'artifacts delete'],
+    ['emulator ball', 'emulator kill'],
+    ['emulator showdown', 'emulator shutdown'],
+    ['orchestration worker-showw', 'orchestration worker-stop'],
+    ['orchestration worker-relay', 'orchestration worker-release'],
+    ['tab clues', 'tab close'],
+    ['environment rollbook', 'environment rollback'],
+    ['linear relation move', 'linear relation remove']
+  ])('keeps %s recovery away from %s before runtime lookup', async (input, forbidden) => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    runtimeClientConstructorMock.mockClear()
+    try {
+      await main([...input.split(' '), '--json'], '/tmp/repo')
+      expect(process.exitCode).toBe(1)
+      const output = logSpy.mock.calls.flat().join('\n')
+      expect(output).toContain('invalid_argument')
+      expect(output).toContain('"runtimeId": null')
+      expect(output).not.toContain(`orca ${forbidden}`)
+      expect(output).not.toContain(`"${forbidden}"`)
+      expect(runtimeClientConstructorMock).not.toHaveBeenCalled()
+      expect(callMock).not.toHaveBeenCalled()
+    } finally {
+      logSpy.mockRestore()
+    }
+
+    await main(input.split(' '), '/tmp/repo')
+    expect(errorSpy.mock.calls.flat().join('\n')).not.toContain(`orca ${forbidden}`)
+    expect(runtimeClientConstructorMock).not.toHaveBeenCalled()
+    expect(callMock).not.toHaveBeenCalled()
+  })
+
   it('reports a mistyped pre-command flag without swallowing the command', async () => {
     await main(['--jso', 'worktree', 'list'], '/tmp/repo')
 
@@ -381,6 +428,38 @@ describe('unknown help command surfaces a suggestion', () => {
   })
 })
 
+describe('nested command group help', () => {
+  it.each([
+    ['browser', ['browser'], ['identity get', 'identity set']],
+    ['browser identity', ['browser', 'identity'], ['get', 'set']]
+  ])(
+    'prints successful help for %s without constructing a runtime client',
+    async (_, path, commands) => {
+      const previousExitCode = process.exitCode
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+      runtimeClientConstructorMock.mockClear()
+      process.exitCode = 0
+
+      try {
+        await main([...path, '--help'], '/tmp/repo')
+
+        expect(process.exitCode).toBe(0)
+        const output = logSpy.mock.calls.flat().join('\n')
+        expect(output).toContain(`orca ${path.join(' ')}`)
+        for (const command of commands) {
+          expect(output).toContain(command)
+        }
+        expect(output).not.toContain('Unknown command')
+        expect(runtimeClientConstructorMock).not.toHaveBeenCalled()
+        expect(callMock).not.toHaveBeenCalled()
+      } finally {
+        process.exitCode = previousExitCode
+        logSpy.mockRestore()
+      }
+    }
+  )
+})
+
 describe('orca root help', () => {
   it('advertises machine-readable agent discovery', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -397,10 +476,10 @@ describe('orca root help', () => {
     await main([], '/tmp/repo')
 
     expect(logSpy.mock.calls.flat().join('\n')).toContain(
-      'account add               Add a managed Claude or Codex account on this Orca host'
+      'account add               Add a managed agent account on this Orca host'
     )
     expect(logSpy.mock.calls.flat().join('\n')).toContain(
-      'account list              List managed Claude and Codex accounts on this Orca host'
+      'account list              List managed agent accounts on this Orca host'
     )
     logSpy.mockRestore()
   })
@@ -450,10 +529,7 @@ describe('orca root help', () => {
     )
     expect(logSpy.mock.calls[0][0]).toContain('Agent Sessions And Worktrees:')
     expect(logSpy.mock.calls[0][0]).toContain(
-      '`worktree create --agent` creates a new checkout with an agent.'
-    )
-    expect(logSpy.mock.calls[0][0]).toContain(
-      'orca terminal create --worktree active --command "codex"'
+      'orca agent launch --agent codex --model gpt-6-astra --effort high'
     )
     expect(logSpy.mock.calls[0][0]).toContain(
       'orchestration worker-start Start a supervised worker locally or on a connected Orca server'
@@ -484,7 +560,7 @@ describe('orca root help', () => {
 
     const rootHelp = String(logSpy.mock.calls[0][0])
     expect(rootHelp).toContain('Linear:')
-    expect(rootHelp).toContain('linear                    Read Linear ticket context for agents')
+    expect(rootHelp).toContain('linear                    Read and write Linear issues for agents')
     expect(rootHelp).not.toContain('linear issue')
     expect(rootHelp).not.toContain('linear search')
 
@@ -644,7 +720,7 @@ describe('orca root help', () => {
     expect(callMock).not.toHaveBeenCalled()
   })
 
-  it('distinguishes new worktrees from fresh agent terminals in command help', async () => {
+  it('points both create commands at the agent launch for starting agents', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     logSpy.mockClear()
 
@@ -652,17 +728,14 @@ describe('orca root help', () => {
 
     expect(String(logSpy.mock.calls[0][0])).toContain('This creates a new checkout.')
     expect(String(logSpy.mock.calls[0][0])).toContain(
-      'orca terminal create --worktree active --command "codex"'
+      'For a fresh agent in an existing worktree, use `orca agent launch`'
     )
 
     logSpy.mockClear()
     await main(['terminal', 'create', '--help'], '/tmp/repo')
 
     const terminalHelp = String(logSpy.mock.calls[0][0])
-    expect(terminalHelp).toContain('Use this, not worktree create')
-    expect(terminalHelp).toContain(
-      'orca terminal create --worktree active --command "codex" --json'
-    )
+    expect(terminalHelp).toContain('To start an agent, use `orca agent launch`')
     expect(callMock).not.toHaveBeenCalled()
   })
 })

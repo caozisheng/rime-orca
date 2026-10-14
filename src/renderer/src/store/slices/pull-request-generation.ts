@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
-import type { GlobalSettings } from '../../../../shared/global-settings-types'
 import type { AppState } from '../types'
+import type { RuntimeClientTarget } from '../../../../shared/runtime-client-target'
+import { resolveGeneratedFields } from './pull-request-generation-auto-submit'
 
 export type PullRequestFieldName = 'base' | 'title' | 'body' | 'draft'
 export type PullRequestFieldRevisions = Record<PullRequestFieldName, number>
@@ -12,11 +13,6 @@ export type PullRequestGenerationFields = {
   draft: boolean
 }
 
-export type PullRequestGenerationRuntimeTargetSettings = Pick<
-  GlobalSettings,
-  'activeRuntimeEnvironmentId'
->
-
 export type PullRequestGenerationContext = {
   worktreeId: string | null
   worktreePath: string
@@ -24,7 +20,8 @@ export type PullRequestGenerationContext = {
   requestId: number
   repoId: string
   branch: string
-  runtimeTargetSettings?: PullRequestGenerationRuntimeTargetSettings | null
+  /** The worktree owner's transport, captured when the request started. */
+  runtimeTarget: RuntimeClientTarget
 }
 
 export type PullRequestGenerationStatus = 'idle' | 'running' | 'canceled' | 'failed' | 'succeeded'
@@ -38,6 +35,7 @@ export type PullRequestGenerationRecord = {
   result: PullRequestGenerationFields | null
   error: string | null
   hydrated: boolean
+  autoSubmit?: boolean
 }
 
 export type PullRequestGenerationRecords = Record<string, PullRequestGenerationRecord>
@@ -135,7 +133,8 @@ export function getPullRequestGenerationSeedRestoreKey({
 export function createRunningPullRequestGenerationRecord(
   context: PullRequestGenerationContext,
   seed: PullRequestGenerationFields,
-  seedFieldRevisions: PullRequestFieldRevisions
+  seedFieldRevisions: PullRequestFieldRevisions,
+  autoSubmit = false
 ): PullRequestGenerationRecord {
   return {
     context,
@@ -145,7 +144,8 @@ export function createRunningPullRequestGenerationRecord(
     status: 'running',
     result: null,
     error: null,
-    hydrated: false
+    hydrated: false,
+    autoSubmit
   }
 }
 
@@ -164,7 +164,7 @@ export function resolvePullRequestGenerationSuccess({
   return {
     ...record,
     status: 'succeeded',
-    result,
+    result: resolveGeneratedFields(record, result),
     error: null,
     hydrated: false
   }

@@ -34,18 +34,11 @@ vi.mock('../github/client', async () =>
 vi.mock('../source-control/hosted-review', async () =>
   (await import('./worktrees-test-module-mocks')).hostedReviewModuleMock()
 )
-vi.mock('../providers/ssh-git-dispatch', async () =>
-  (await import('./worktrees-test-module-mocks')).sshGitDispatchModuleMock()
-)
 vi.mock('../providers/ssh-filesystem-dispatch', async () =>
   (await import('./worktrees-test-module-mocks')).sshFilesystemDispatchModuleMock()
 )
 vi.mock('./worktree-symlinks', async () =>
   (await import('./worktrees-test-module-mocks')).worktreeSymlinksModuleMock()
-)
-vi.mock('./ssh', async () => (await import('./worktrees-test-module-mocks')).sshModuleMock())
-vi.mock('../ssh/ssh-target-registry', async () =>
-  (await import('./worktrees-test-module-mocks')).sshTargetRegistryModuleMock()
 )
 vi.mock('../hooks', async () => (await import('./worktrees-test-module-mocks')).hooksModuleMock())
 vi.mock('../setup-runner-script-text', async (importOriginal) =>
@@ -91,7 +84,12 @@ vi.mock('../workspace-cleanup-removal-snapshot-prune', async () =>
 vi.mock('../runtime/worktree-teardown', async () =>
   (await import('./worktrees-test-module-mocks')).worktreeTeardownModuleMock()
 )
-vi.mock('./pty', async () => (await import('./worktrees-test-module-mocks')).ptyModuleMock())
+vi.mock('./pty/provider/registry', async () =>
+  (await import('./worktrees-test-module-mocks')).ptyRegistryModuleMock()
+)
+vi.mock('./pty/provider/state-cleanup', async () =>
+  (await import('./worktrees-test-module-mocks')).ptyStateCleanupModuleMock()
+)
 
 describe('registerWorktreeHandlers', () => {
   let runtimeStub: WorktreeRuntimeStub
@@ -295,7 +293,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/feature-something-2',
       'feature/something-2',
       'origin/main',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -338,7 +338,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title',
       'feature/fix',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
     expect(gitExecFileAsyncMock).toHaveBeenCalledWith(
       ['branch', '--set-upstream-to', 'origin/feature/fix', 'feature/fix'],
@@ -431,7 +433,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/bitbucket-title',
       'feature/bitbucket',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
     expect(store.setWorktreeMeta).toHaveBeenCalledWith(
       'repo-1::/workspace/bitbucket-title',
@@ -485,7 +489,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/bitbucket-title-2',
       'feature/bitbucket-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
     expect(store.setWorktreeMeta).toHaveBeenCalledWith(
       'repo-1::/workspace/bitbucket-title-2',
@@ -520,7 +526,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title-2',
       'feature/fix-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -552,7 +560,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title-2',
       'feature/fix-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -594,7 +604,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title-2',
       'feature/fix-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -628,7 +640,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title-2',
       'feature/fix-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -721,7 +735,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/fix-title-2',
       'feature/fix-2',
       'abc123',
-      false
+      false,
+      false,
+      {}
     )
   })
 
@@ -763,7 +779,9 @@ describe('registerWorktreeHandlers', () => {
       '/workspace/improve-dashboard-3',
       'improve-dashboard-3',
       'origin/main',
-      false
+      false,
+      false,
+      {}
     )
     expect(result).toMatchObject({
       worktree: expect.objectContaining({

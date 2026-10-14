@@ -1,6 +1,6 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import { OrcaRuntimeWithSerializeTerminalBufferFromAvailableState } from './orca-runtime-serialize-terminal-buffer-from-available-state'
-import type { PtyProviderBufferSnapshot } from '../providers/types'
+import type { PtyProviderBufferSnapshot } from '../providers/pty-provider-contract'
 import { TerminalKittyKeyboardModeTracker } from '../../shared/terminal-kitty-keyboard-mode-tracker'
 import type { RuntimeTerminalRead } from '../../shared/runtime-types'
 import type { RuntimeProviderSnapshotReadOptions } from './runtime-terminal-contracts'
@@ -31,7 +31,7 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
       // Why: daemon PTYs survive an app relaunch before any renderer mounts.
       // Mobile still needs their retained history without navigating desktop.
       const snapshot = await this.ptyController?.serializeProviderBuffer?.(ptyId, opts)
-      if (!snapshot || this.getPtyLifecycleGeneration(ptyId) !== generation) {
+      if (!snapshot || this.ptyLifecycleGenerationById.get(ptyId) !== generation) {
         return null
       }
       const snapshotModeTracker = new TerminalKittyKeyboardModeTracker()
@@ -73,7 +73,10 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
       return null
     } finally {
       liveModeTrackers.delete(liveModeTracker)
-      if (liveModeTrackers.size === 0) {
+      if (
+        liveModeTrackers.size === 0 &&
+        this.providerModeSnapshotScansByPtyId.get(ptyId) === liveModeTrackers
+      ) {
         this.providerModeSnapshotScansByPtyId.delete(ptyId)
       }
     }
@@ -108,7 +111,8 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
           read,
           providerProjection.lines,
           opts.limit,
-          providerProjection.draft
+          providerProjection.draft,
+          providerProjection.tailRows
         )
       }
     }
@@ -140,7 +144,13 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
     if (projection.lines.length === 0) {
       return read
     }
-    return buildVisibleSnapshotReadFallback(read, projection.lines, opts.limit, projection.draft)
+    return buildVisibleSnapshotReadFallback(
+      read,
+      projection.lines,
+      opts.limit,
+      projection.draft,
+      projection.tailRows
+    )
   }
 
   protected async readProviderTerminalTailLines(
@@ -163,7 +173,7 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
     if (snapshotOptions.visibleScreenOnly) {
       const projection = await this.parseVisibleSnapshot(snapshot)
       // Live bytes ordered after the provider frame make that frame stale.
-      return this.getPtyLifecycleGeneration(ptyId) === generation &&
+      return this.ptyLifecycleGenerationById.get(ptyId) === generation &&
         this.getPtyOutputSequence(ptyId) <= snapshot.seq
         ? projection
         : { lines: [] }
@@ -180,7 +190,7 @@ export class OrcaRuntimeWithCaptureProviderTerminalBuffer extends OrcaRuntimeWit
     try {
       await emulator.write(data)
       const projection = projectTerminalTailLines(emulator, lineLimit)
-      return this.getPtyLifecycleGeneration(ptyId) === generation &&
+      return this.ptyLifecycleGenerationById.get(ptyId) === generation &&
         this.getPtyOutputSequence(ptyId) <= snapshot.seq
         ? projection
         : { lines: [] }

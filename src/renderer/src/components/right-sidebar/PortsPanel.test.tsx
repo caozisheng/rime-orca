@@ -21,7 +21,7 @@ vi.mock('@/lib/worktree-activation', () => ({
   activateAndRevealWorktree: activateAndRevealWorktreeMock
 }))
 
-import { getLocalWorkspacePortSections } from './PortsPanel'
+import { getLocalWorkspacePortSections } from './local-workspace-port-sections'
 import {
   getPortOpenBrowserTooltipLabel,
   getPortSystemBrowserHint,
@@ -417,31 +417,6 @@ describe('PortsPanel runtime routing', () => {
         createBrowserTab: createBrowserTab as never,
         setRemoteBrowserPageHandle: setRemoteBrowserPageHandle as never,
         openInOrcaBrowser: false
-      })
-    ).resolves.toEqual({ ok: true })
-
-    expect(openUrl).toHaveBeenCalledWith('http://127.0.0.1:63468')
-    expect(createBrowserTab).not.toHaveBeenCalled()
-    expect(activateAndRevealWorktreeMock).not.toHaveBeenCalled()
-  })
-
-  it('opens forced local workspace port clicks in the system browser', async () => {
-    const createBrowserTab = vi.fn()
-    const setRemoteBrowserPageHandle = vi.fn()
-    openUrl.mockResolvedValueOnce(undefined)
-    const openInOrcaBrowser = resolvePortOpenInOrcaBrowser({
-      settings: { openLinksInApp: true },
-      event: portOpenClick({ ctrlKey: true, shiftKey: true }),
-      isMac: false
-    })
-
-    await expect(
-      openWorkspacePortInBrowser({
-        port: workspacePort,
-        runtimeTarget: { kind: 'local' },
-        createBrowserTab: createBrowserTab as never,
-        setRemoteBrowserPageHandle: setRemoteBrowserPageHandle as never,
-        openInOrcaBrowser
       })
     ).resolves.toEqual({ ok: true })
 

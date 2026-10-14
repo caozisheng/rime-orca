@@ -1,3 +1,5 @@
+import type { ManagedOrcadPreloadApi } from './managed-orcad-api'
+import type { WslHostsPreloadApi } from './wsl-hosts-api'
 import type { RuntimeHostStatusSnapshot } from '../../shared/runtime-host-status'
 import type {
   RuntimeBrowserDriverState,
@@ -15,6 +17,7 @@ import type {
   BrowserPageCreationPlacement
 } from '../../shared/browser-client-host-placement'
 import type { RemoteRuntimeSharedConnectionDiagnostics } from '../../shared/remote-runtime-shared-control-types'
+import type { WslOrcadAccountNotAppliedEvent } from '../../shared/wsl-orcad-account-notice'
 
 export type RuntimeEnvironmentSubscriptionHandle = {
   unsubscribe: () => void
@@ -112,6 +115,10 @@ export type RuntimeApi = {
         diagnostics: RemoteRuntimeSharedConnectionDiagnostics
       }) => void
     ) => () => void
+    // Absent in the web client, which has no desktop account shim.
+    onWslAccountNotApplied?: (
+      callback: (event: WslOrcadAccountNotAppliedEvent) => void
+    ) => () => void
     prepareBrowserClientHostPlacement: (
       args: BrowserClientHostPlacementPreparationRequest
     ) => Promise<BrowserPageCreationPlacement>
@@ -125,8 +132,10 @@ export type RuntimeApi = {
       expectedEnvironmentPairingRevision?: number
       expectedEnvironmentRuntimeId?: string
     }) => Promise<RuntimeRpcResponse<unknown>>
+    cancelSubscription: (args: { subscriptionId: string }) => Promise<void>
     subscribe: (
       args: {
+        subscriptionId?: string
         selector: string
         method: string
         params?: unknown
@@ -141,6 +150,10 @@ export type RuntimeApi = {
         onClose?: () => void
       }
     ) => Promise<RuntimeEnvironmentSubscriptionHandle>
+    // Why optional: only the desktop preload deploys servers over SSH.
+    managedOrcad?: ManagedOrcadPreloadApi
+    // Why optional: only a Windows desktop (or the e2e fake) has WSL distros to host.
+    wslHosts?: WslHostsPreloadApi
   }
   wsl: {
     isAvailable: () => Promise<boolean>

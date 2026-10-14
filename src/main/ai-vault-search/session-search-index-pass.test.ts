@@ -1,8 +1,12 @@
 import { appendFile, rm, stat, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
+import { isAiVaultScanCancelledError } from '../../shared/ai-vault-types'
 import { resetSessionParseCacheForTests } from '../ai-vault/session-scanner-parse-cache'
-import { resetTranscriptConsumersForTests } from '../ai-vault/session-transcript-consumers'
+import {
+  registerTranscriptConsumer,
+  resetTranscriptConsumersForTests
+} from '../ai-vault/session-transcript-consumers'
 import { registerSessionSearchIndexConsumer } from './session-search-index-consumer'
 import { runSessionSearchIndexPass } from './session-search-index-pass'
 import { parseTranscript } from './session-search-transcript-fixtures'
@@ -98,16 +102,33 @@ it('resumes into a grown transcript instead of re-reading it whole', async () =>
 
 // Nothing is recorded about what a deadline cut off, because being owed is a
 // fact about the row: the file is read on the next pass for the same reason it
-// was owed on this one.
+// was owed on this one. The one thing handed back is how many there were, since
+// a candidate with no row yet is a backlog no query can see.
 it('leaves what it ran out of time for owed, with nothing written down', async () => {
   const all = await candidates()
   const cut = await runSessionSearchIndexPass(store, all, { rows: rows(), overdue: () => true })
 
-  expect(cut.outOfTime).toBe(true)
+  expect(cut).toMatchObject({ outOfTime: true, left: 1 })
   expect(store.files()).toHaveLength(1)
   const second = await passOverAll()
   expect(second.stats.fullParses).toBe(1)
   expect(store.files()).toHaveLength(2)
+})
+
+// A deferred candidate whose row already says `due` is in `stateCounts().due`,
+// which the status adds `left` to; counting it here would report it twice.
+it('leaves a deferred candidate out of the count when its row already says due', async () => {
+  await passOverAll()
+  for (const row of store.files()) {
+    store.setFileState(row.path, 'due')
+  }
+
+  const cut = await runSessionSearchIndexPass(store, await candidates(), {
+    rows: rows(),
+    overdue: () => true
+  })
+
+  expect(cut).toMatchObject({ outOfTime: true, left: 0 })
 })
 
 // The deadline is never applied before the pass has read anything, so a single
@@ -116,7 +137,7 @@ it('reads one file even when the deadline has already expired', async () => {
   const only = (await candidates()).slice(0, 1)
   const alone = await runSessionSearchIndexPass(store, only, { rows: rows(), overdue: () => true })
 
-  expect(alone.outOfTime).toBe(false)
+  expect(alone).toMatchObject({ outOfTime: false, left: 0 })
   expect(store.files()).toHaveLength(1)
 })
 
@@ -131,6 +152,43 @@ it('skips a source the reader cannot even open without failing the pass', async 
     n: 1
   })
   expect(states()[transcript(FIRST)]).toBe('failed')
+})
+
+it('stops a cancelled read part way without counting it as a failure', async () => {
+  // Several stream chunks, so the cancel lands with most of the file unread.
+  const turns = Array.from({ length: 100 }, (_, index) => `${index} ${'x'.repeat(2_000)}`)
+  await writeClaudeTranscript(transcript(FIRST), turns, FIRST)
+  const controller = new AbortController()
+  let firstMessages = 0
+  const unregister = registerTranscriptConsumer({
+    beginRead: (start) =>
+      start.candidate.file.path === transcript(FIRST)
+        ? {
+            message: () => {
+              firstMessages += 1
+              controller.abort()
+            },
+            finish: () => {}
+          }
+        : null
+  })
+  await expect(
+    runSessionSearchIndexPass(store, await candidates(), {
+      rows: rows(),
+      signal: controller.signal
+    })
+  ).rejects.toSatisfy(isAiVaultScanCancelledError)
+  unregister()
+
+  expect(firstMessages).toBeLessThan(turns.length)
+  expect(Object.values(states())).not.toContain('failed')
+
+  await passOverAll()
+  expect(states()).toEqual({
+    [transcript(FIRST)]: 'current',
+    [transcript(SECOND)]: 'current'
+  })
+  expect(errors).toEqual([])
 })
 
 // Finding 6: mtime alone is not the freshness key. A transcript that grows

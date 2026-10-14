@@ -13,10 +13,7 @@ import {
 import { ORCA_BROWSER_BLANK_URL } from '../../../../../shared/constants'
 import { closeRemoteBrowserPageInOwningEnvironment } from './browser-remote-close'
 import { releaseDocPreviewGrant } from '@/lib/doc-preview-grants'
-import {
-  admitBrowserPageMount,
-  releaseBrowserPageMount
-} from '@/components/browser-pane/host-guest/browser-page-mount-admission'
+import { admitBrowserPageMount } from '@/components/browser-pane/host-guest/browser-page-mount-admission'
 
 export function createBrowserPageCreateActions(
   set: BrowserSliceSet,
@@ -101,7 +98,6 @@ export function createBrowserPageCreateActions(
     },
 
     closeBrowserPage: (pageId) => {
-      releaseBrowserPageMount(pageId)
       let closedWorkspaceIdForLabel: string | null = null
       let docPageIdToRelease: string | null = null
       const remotePagesToClose: { worktreeId: string; handle: RemoteBrowserPageHandle }[] = []
@@ -140,7 +136,9 @@ export function createBrowserPageCreateActions(
         }
         delete nextRemoteBrowserPageHandlesByPageId[pageId]
         const nextBrowserAnnotationsByPageId = { ...s.browserAnnotationsByPageId }
+        const nextBrowserAnnotationMarkerIdsByPageId = { ...s.browserAnnotationMarkerIdsByPageId }
         delete nextBrowserAnnotationsByPageId[pageId]
+        delete nextBrowserAnnotationMarkerIdsByPageId[pageId]
         const nextBrowserCertificateFailuresByPageId = {
           ...s.browserCertificateFailuresByPageId
         }
@@ -178,7 +176,8 @@ export function createBrowserPageCreateActions(
           ),
           remoteBrowserPageHandlesByPageId: nextRemoteBrowserPageHandlesByPageId,
           browserCertificateFailuresByPageId: nextBrowserCertificateFailuresByPageId,
-          browserAnnotationsByPageId: nextBrowserAnnotationsByPageId
+          browserAnnotationsByPageId: nextBrowserAnnotationsByPageId,
+          browserAnnotationMarkerIdsByPageId: nextBrowserAnnotationMarkerIdsByPageId
         }
       })
 

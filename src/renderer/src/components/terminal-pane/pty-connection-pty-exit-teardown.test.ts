@@ -164,14 +164,14 @@ function installSleepingCodexResumeState(restoredPtyId?: string) {
 }
 
 describe('connectPanePty', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
     transportFactoryQueue = []
     createdTransportOptions = []
     storeSubscribers = []
     mockStoreState = createInitialStoreState(() => mockStoreState)
-    installTerminalTestGlobals()
+    await installTerminalTestGlobals()
   })
 
   afterEach(async () => {
@@ -629,27 +629,6 @@ describe('connectPanePty', () => {
     })
   })
 
-  it('does not retain a failed direct-SSH terminal locally', async () => {
-    const { connectPanePty } = await import('./pty-connection')
-    mockStoreState = {
-      ...mockStoreState,
-      repos: [{ ...mockStoreState.repos[0], connectionId: 'ssh-1' }]
-    } as StoreState
-    const transport = createMockTransport('tab-pty')
-    transportFactoryQueue.push(transport)
-    const manager = createManager(1)
-    const deps = createDeps({ onPaneProcessDied: vi.fn() })
-
-    connectPanePty(createPane(1) as never, manager as never, deps as never)
-    const onPtyExit = createdTransportOptions[0]?.onPtyExit as
-      | ((ptyId: string, exitCode?: number) => void)
-      | undefined
-    onPtyExit?.('tab-pty', 1)
-
-    expect(deps.onPaneProcessDied).not.toHaveBeenCalled()
-    expect(deps.onPtyExitRef.current).toHaveBeenCalledWith('tab-pty', 1)
-  })
-
   it('tears down the sole terminal when a reattached (not freshly spawned) PTY exits', async () => {
     // Why: reattach/coldRestore skip onPtySpawn, so a now-dead previously-live session must still route through onPtyExitRef; the keep-mounted guard is only for brand-new shells.
     const { connectPanePty } = await import('./pty-connection')
@@ -853,6 +832,25 @@ describe('connectPanePty', () => {
     onPtyExit?.('pty-pane-2')
 
     expect(manager.closePane).toHaveBeenCalledWith(2)
+  })
+
+  it('removes the agent row when an established PTY exits through EOF (#12907)', async () => {
+    const { connectPanePty } = await import('./pty-connection')
+    const transport = createMockTransport('pty-pane-2')
+    transportFactoryQueue.push(transport)
+    const manager = createManager(2)
+    const deps = createDeps({
+      restoredLeafId: LEAF_2,
+      paneTransportsRef: { current: new Map([[1, createMockTransport('pty-pane-1')]]) }
+    })
+
+    connectPanePty(createPane(2) as never, manager as never, deps as never)
+    const onPtyExit = createdTransportOptions[0]?.onPtyExit as ((ptyId: string) => void) | undefined
+    expect(onPtyExit).toBeTypeOf('function')
+
+    onPtyExit?.('pty-pane-2')
+
+    expect(mockStoreState.removeAgentStatus).toHaveBeenCalledWith(makePaneKey('tab-1', LEAF_2))
   })
 
   it('closes a split pane when an established PTY exits after terminal input', async () => {

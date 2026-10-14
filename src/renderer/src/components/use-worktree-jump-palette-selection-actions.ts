@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { activateBrowserPagePaletteResult } from '@/lib/browser-page-palette-activation'
 import { activateSimulatorTabPaletteResult } from '@/lib/simulator-tab-palette-activation'
 import { activateWorkspaceTabPaletteResult } from '@/lib/workspace-tab-palette-activation'
-import { activateAndRevealWorktree } from '@/lib/worktree-activation'
+import { activateAndRevealWorkspace } from '@/lib/worktree-activation'
 import { queueWorkspaceActivationTerminalFocus } from '@/lib/workspace-activation-terminal-focus'
 import type { BrowserPaletteSearchResult } from '@/lib/browser-palette-search'
 import type { SimulatorPaletteSearchResult } from '@/lib/simulator-palette-search'
@@ -65,10 +65,13 @@ export function useWorktreeJumpPaletteSelectionActions({
         )
         return
       }
-      const activation = activateAndRevealWorktree(
-        worktree.id,
-        executionHostId ? { executionHostId } : {}
-      )
+      const activation = activateAndRevealWorkspace(worktree.id, {
+        navigationIntent: 'user-open',
+        ...(executionHostId ? { executionHostId } : {})
+      })
+      if (!activation) {
+        return
+      }
       recordFeatureInteraction('cmd-j-workspace-open')
       skipRestoreFocusRef.current = true
       closeModal()
@@ -83,6 +86,9 @@ export function useWorktreeJumpPaletteSelectionActions({
   const handleSelectBrowserPage = useCallback(
     (result: BrowserPaletteSearchResult) => {
       const activation = activateBrowserPagePaletteResult(result)
+      if (activation.status === 'blocked') {
+        return
+      }
       if (activation.status === 'failed') {
         toast.error(
           activation.reason === 'missing-page'
@@ -109,6 +115,9 @@ export function useWorktreeJumpPaletteSelectionActions({
   const handleSelectSimulatorTab = useCallback(
     (result: SimulatorPaletteSearchResult) => {
       const activation = activateSimulatorTabPaletteResult(result)
+      if (activation.status === 'blocked') {
+        return
+      }
       if (activation.status === 'failed') {
         toast.error(
           activation.reason === 'missing-tab'
@@ -133,6 +142,9 @@ export function useWorktreeJumpPaletteSelectionActions({
   const handleSelectWorkspaceTab = useCallback(
     (result: WorkspaceTabPaletteSearchResult) => {
       const activation = activateWorkspaceTabPaletteResult(result)
+      if (activation.status === 'blocked') {
+        return
+      }
       if (activation.status === 'failed') {
         toast.error(
           activation.reason === 'missing-worktree'
@@ -207,6 +219,8 @@ export function useWorktreeJumpPaletteSelectionActions({
   const handleSelectProjectTarget = useCallback(
     (result: CmdJProjectSearchResult) => {
       skipRestoreFocusRef.current = true
+      // Why switch: picking a project row explicitly asks to see it in the workspace list.
+      useAppStore.getState().setSidebarBody('workspaces')
       revealSidebarRow(result.rowKey, { behavior: 'smooth', highlight: true })
       recordFeatureInteraction('cmd-j')
       closeModal()

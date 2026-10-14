@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import type { ExecutionHostId } from '../../../src/shared/execution-host'
-import type { RepoIcon } from '../../../src/shared/repo-icon'
+import type { ExecutionHostHealth } from '../../../src/shared/execution-host-health'
 import type { WorkspaceStatusDefinition } from '../../../src/shared/worktree/types'
 import { getCachedWorktrees } from '../cache/worktree-cache'
 import { createInitialHostRouteActionState } from '../host-route-action-state'
@@ -13,6 +13,8 @@ import type {
   MobileViewState
 } from '../worktree/workspace-view-settings'
 import type { FilterState, Worktree } from '../worktree/workspace-list-sections'
+import type { MobileHostRepoIcon } from './host-screen-reply-schema'
+import { NO_SERVER_WORKSPACES, type ServerWorkspaces } from '../worktree/server-workspaces'
 
 export function useHostScreenState(hostId: string | undefined, action: string | undefined) {
   const [initialCache] = useState(() =>
@@ -38,9 +40,18 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     string | null
   >(null)
   const [repoColorsByName, setRepoColorsByName] = useState<Map<string, string>>(new Map())
-  const [repoIconsByName, setRepoIconsByName] = useState<Map<string, RepoIcon>>(new Map())
+  const [repoIconsByName, setRepoIconsByName] = useState<Map<string, MobileHostRepoIcon>>(new Map())
   const [hostName, setHostName] = useState('')
+  // The stored name identity, loaded with the name so the header can label an offline host.
+  const [hostStoredDescriptor, setHostStoredDescriptor] = useState<{
+    personalName?: string
+    lastKnownMachineName?: string
+    lastKnownHostPlatform?: NodeJS.Platform
+  } | null>(null)
   const [error, setError] = useState('')
+  // An action that did not happen, said above the list rather than instead of it. Separate from
+  // `error`, which is the screen's identity and is the one thing worth taking the whole view for.
+  const [actionError, setActionError] = useState('')
   const [lastKnownWorktrees, setLastKnownWorktrees] = useState<Worktree[]>(initialCache ?? [])
   const [search, setSearch] = useState('')
   const [showSearch, setShowSearch] = useState(false)
@@ -62,7 +73,16 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     new Map()
   )
   const [hostLabelById, setHostLabelById] = useState<Map<ExecutionHostId, string>>(new Map())
+  const [hostHealthById, setHostHealthById] = useState<Map<ExecutionHostId, ExecutionHostHealth>>(
+    new Map()
+  )
   const [hostPlatform, setHostPlatform] = useState<NodeJS.Platform | null>(null)
+  // The desktop's servers and their rows, listed through the desktop (mobileRelay.hosts.*).
+  const [serverWorkspaces, setServerWorkspaces] = useState<ServerWorkspaces>(NO_SERVER_WORKSPACES)
+  // The desktop's shown hosts (ui.get visibleWorkspaceHostIds); null shows every host.
+  const [visibleHostIds, setVisibleHostIds] = useState<ReadonlySet<ExecutionHostId> | null>(null)
+  // Why its own banner state: a tap on a server that needs an update says so until dismissed.
+  const [serverNotice, setServerNotice] = useState<string | null>(null)
   const [showSortPicker, setShowSortPicker] = useState(false)
   const [showGroupPicker, setShowGroupPicker] = useState(false)
   const [showFilterModal, setShowFilterModal] = useState(false)
@@ -75,6 +95,8 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
   const [sleptIds, setSleptIds] = useState<Set<string>>(new Set())
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  // Desktop's "Also show pinned worktrees in their original lists"; off by default.
+  const [showPinnedInGroups, setShowPinnedInGroups] = useState(false)
   // Why: ref so the ui.get merge and ui.set writes read the latest values without re-creating callbacks on every state change.
   const viewStateRef = useRef<MobileViewState>({
     groupMode: 'repo',
@@ -94,6 +116,7 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     collapsedGroups,
     confirmDelete,
     confirmRemoveHost,
+    actionError,
     error,
     fetchRepoMetadataInFlightRef,
     fetchRepoMetadataPendingRef,
@@ -101,8 +124,10 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     filters,
     groupMode,
     hostLabelById,
+    hostHealthById,
     hostName,
     hostPlatform,
+    hostStoredDescriptor,
     lastKnownWorktrees,
     newWorktreeModalRef,
     newWorktreeModalVisibleRef,
@@ -115,17 +140,22 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     repoMetadataFetchedAtRef,
     routeActionState,
     search,
+    serverNotice,
+    serverWorkspaces,
     setActionTarget,
     setCatalogError,
     setCollapsedGroups,
     setConfirmDelete,
     setConfirmRemoveHost,
+    setActionError,
     setError,
     setFilters,
     setGroupMode,
     setHostLabelById,
+    setHostHealthById,
     setHostName,
     setHostPlatform,
+    setHostStoredDescriptor,
     setLastKnownWorktrees,
     setOptimisticActiveWorktreeIdentity,
     setPinnedIds,
@@ -135,22 +165,28 @@ export function useHostScreenState(hostId: string | undefined, action: string | 
     setRepoIdsByName,
     setRouteActionState,
     setSearch,
+    setServerNotice,
+    setServerWorkspaces,
     setShowFilterModal,
+    setShowPinnedInGroups,
     setShowGroupPicker,
     setShowSearch,
     setShowSortPicker,
     setSleptIds,
     setSortMode,
+    setVisibleHostIds,
     setWorkspaceStatuses,
     setWorktrees,
     setWorktreesLoaded,
     showFilterModal,
+    showPinnedInGroups,
     showGroupPicker,
     showSearch,
     showSortPicker,
     sleptIds,
     sortMode,
     viewStateRef,
+    visibleHostIds,
     workspaceStatuses,
     worktreeCatalogRef,
     worktrees,

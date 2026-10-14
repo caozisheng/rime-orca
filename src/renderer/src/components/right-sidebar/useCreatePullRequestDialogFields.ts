@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   DEFAULT_SOURCE_CONTROL_AI_PR_CREATION_DEFAULTS,
   resolveSourceControlAiForOperation
@@ -11,6 +11,7 @@ import {
   resolveCreateReviewDefaultBaseRef,
   stripBaseRef
 } from './create-pull-request-base-ref-normalization'
+import { resolveCreateReviewSeedText } from './create-review-draft-title'
 import {
   createInitialPullRequestFieldRevisions,
   type GenerationSeed,
@@ -20,6 +21,7 @@ import {
 import { useCreatePullRequestFieldSeeding } from './use-create-pull-request-field-seeding'
 import { useCreatePullRequestBaseRefDiscovery } from './use-create-pull-request-base-ref-discovery'
 import { useCreatePullRequestFieldGeneration } from './use-create-pull-request-field-generation'
+import { runtimeTargetForOwnerEnvironment } from '@/runtime/runtime-client-target'
 
 export function useCreatePullRequestDialogFields({
   open,
@@ -31,6 +33,7 @@ export function useCreatePullRequestDialogFields({
   currentBaseRef,
   repo,
   settings,
+  target: targetInput,
   submitting,
   prCreationDefaults,
   sourceControlAiActionsVisible = true,
@@ -38,6 +41,13 @@ export function useCreatePullRequestDialogFields({
   onBranchChangedByGeneration,
   generation
 }: UseCreatePullRequestDialogFieldsOptions) {
+  // Why: effects key on the host, not on the object, so a caller's fresh literal can't loop them.
+  const hasTarget = targetInput !== null
+  const targetEnvironmentId = targetInput?.kind === 'environment' ? targetInput.environmentId : null
+  const target = useMemo(
+    () => (hasTarget ? runtimeTargetForOwnerEnvironment(targetEnvironmentId) : null),
+    [hasTarget, targetEnvironmentId]
+  )
   const resolvedPullRequestAi = settings
     ? resolveSourceControlAiForOperation({
         settings,
@@ -75,6 +85,7 @@ export function useCreatePullRequestDialogFields({
   const hasExternalGeneration = Boolean(generation)
   const currentEligibilityKey =
     open && eligibility ? `${repoId}:${worktreeId ?? worktreePath}:${branch}` : null
+  const seedText = resolveCreateReviewSeedText({ branch, eligibility })
   const resolvedDefaultBaseRef = resolveCreateReviewDefaultBaseRef({
     currentBaseRef,
     eligibilityDefaultBaseRef: eligibility?.defaultBaseRef
@@ -187,7 +198,6 @@ export function useCreatePullRequestDialogFields({
   const repoDefaultBaseRef = useCreatePullRequestBaseRefDiscovery({
     open,
     repoId,
-    settings,
     base,
     baseQuery,
     setBase,
@@ -214,6 +224,7 @@ export function useCreatePullRequestDialogFields({
     worktreeId,
     worktreePath,
     settings,
+    target,
     eligibility,
     resolvedPrDefaults,
     generation,
@@ -243,6 +254,7 @@ export function useCreatePullRequestDialogFields({
     setBody: setUserBody,
     draft,
     setDraft: setUserDraft,
+    fieldsAreSeedPlaceholders: title === seedText.title && body === seedText.body,
     stackedCreationSupported: eligibility?.stackedCreationSupported === true,
     repoDefaultBaseRef,
     fieldRevisions: fieldRevisionsRef.current,

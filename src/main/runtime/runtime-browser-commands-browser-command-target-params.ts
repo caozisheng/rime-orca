@@ -18,6 +18,7 @@ import type { RuntimeBrowserPageRegistry } from './runtime-browser-page-registry
 import type { BrowserWindow } from 'electron'
 import type { BrowserBackend } from '../browser/browser-backend'
 import type { BrowserSessionTabSelectionOptions } from './browser-tab-create-publication'
+import type { RpcBinarySender } from './rpc/rpc-binary-sender'
 
 export type BrowserCommandTargetParams = {
   worktree?: string
@@ -50,21 +51,22 @@ export type BrowserScreencastParams = {
 export type BrowserScreencastStartResult = {
   subscriptionId: string
   ready: Extract<BrowserScreencastResult, { type: 'ready' }>
-  // The frame budget belongs to the shared page, not to one subscriber's handle.
-  session: Omit<BrowserScreencastSession, 'updateFrameBudget'>
+  // The frame budget and the page's dialog belong to the shared page, not to one subscriber's handle.
+  session: Omit<BrowserScreencastSession, 'updateFrameBudget' | 'settleDialog'>
   // Why: callers gate frames until they have emitted `ready`, and the snapshot captured
   // for a joining subscriber lands inside that window. This replays it once the gate opens.
   flushPendingFrame: () => void
 }
 
 export type ActiveBrowserScreencastSubscriber = {
-  sendBinary: (bytes: Uint8Array<ArrayBufferLike>) => boolean | void
+  sendBinary: RpcBinarySender
   emit?: (event: BrowserScreencastResult) => void
   done: Promise<void>
   resolveDone: () => void
   viewport: BrowserScreencastViewport
   budget: BrowserScreencastFrameBudget
   pendingFrame: Uint8Array<ArrayBufferLike> | null
+  pendingFrameRetry: ReturnType<typeof setTimeout> | null
   // Why: identifies the viewer across reconnects, which the RPC connectionId cannot — a new
   // socket never reuses the old id, so a reconnecting device would stack a second subscription.
   pairedDeviceId?: string

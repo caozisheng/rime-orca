@@ -1,3 +1,4 @@
+import { AGENT_CHAT_PERMISSION_MODE_OPTION_ID } from './agent-chat-permission-mode'
 import type {
   AgentSessionOptionCatalog,
   CatalogMidSessionApply,
@@ -83,8 +84,10 @@ function optionDescriptor(args: {
   const settable = settableState({ mode, liveTransport, apply: option.apply, composedModelApply })
   // Why: the launch only emits `values[id] ?? defaultValue` alongside a model flag, so
   // a draft names this option's value exactly when a model was picked. Under the CLI's
-  // own default no flag is sent at all, and the CLI's unstated choice is not ours to name.
-  const showDefault = mode === 'draft' && !tracked && !modelIsCliDefault
+  // own default no flag is sent at all, so its choice is nameable only where its listing states it.
+  const cliStatesDefault =
+    modelIsCliDefault && option.kind.type === 'select' && option.kind.defaultIsCliDefault === true
+  const showDefault = !tracked && (cliStatesDefault || (mode === 'draft' && !modelIsCliDefault))
   const valueSource = tracked?.source ?? (showDefault ? 'default' : 'unknown')
   if (option.kind.type === 'select') {
     const choices = choiceWithCurrent(option.kind.choices, tracked)
@@ -145,13 +148,16 @@ const CATEGORY_ORDER: Record<string, number> = {
   mode: 2
 }
 
-/** The snapshot's non-model descriptors in display order. Shared so the two
- *  platforms' option pills can never disagree about ordering. */
+/** The snapshot's per-model descriptors, besides the model, in display order. Shared so the two
+ *  platforms' option pills can never disagree about ordering. The permission mode has its own pill. */
 export function sortNativeChatSessionOptions(
   snapshot: readonly SessionOptionDescriptor[]
 ): SessionOptionDescriptor[] {
   return snapshot
-    .filter((descriptor) => descriptor.category !== 'model')
+    .filter(
+      (descriptor) =>
+        descriptor.category !== 'model' && descriptor.id !== AGENT_CHAT_PERMISSION_MODE_OPTION_ID
+    )
     .sort((left, right) => {
       const leftOrder = CATEGORY_ORDER[left.category ?? ''] ?? 3
       const rightOrder = CATEGORY_ORDER[right.category ?? ''] ?? 3

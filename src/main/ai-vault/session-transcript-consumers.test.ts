@@ -2,6 +2,7 @@ import { appendFile, mkdir, mkdtemp, rm, stat, truncate, utimes, writeFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
+import { isAiVaultScanCancelledError } from '../../shared/ai-vault-types'
 import { scanAiVaultSessions } from './session-scanner'
 import {
   parseAgentSessionFileCached,
@@ -16,12 +17,18 @@ const OPENCODE_SQLITE_SESSION = {
   agent: 'opencode' as const,
   sessionId: 'sqlite-session'
 }
+const OPENCODE_SQLITE_MESSAGES = [
+  { role: 'user' as const, text: 'ask sqlite', timestamp: null },
+  { role: 'assistant' as const, text: 'reply sqlite', timestamp: null }
+]
 
-// Stands in for the worker thread: the point is that its messages never come
-// back over the channel, not what the SQLite read returns.
+// Stands in for the worker thread: the point is which leg the reader asks for
+// and that what comes back reaches the channel, not what the SQLite read returns.
 vi.mock('./session-scanner-opencode-sqlite-worker-spawn', async (importOriginal) => ({
   ...(await importOriginal<typeof OpenCodeSqliteWorkerSpawn>()),
-  parseOpenCodeSqliteSessionViaWorker: () => Promise.resolve(OPENCODE_SQLITE_SESSION)
+  parseOpenCodeSqliteSessionViaWorker: () => Promise.resolve(OPENCODE_SQLITE_SESSION),
+  captureOpenCodeSqliteSessionViaWorker: () =>
+    Promise.resolve({ session: OPENCODE_SQLITE_SESSION, messages: OPENCODE_SQLITE_MESSAGES })
 }))
 import type * as OpenCodeSqliteWorkerSpawn from './session-scanner-opencode-sqlite-worker-spawn'
 import {
@@ -109,6 +116,38 @@ async function writeClaudeFixture(): Promise<{
   await writeFile(transcript, `${jsonLines(claudeTurns(1, 4))}\n`)
   return { root, roots, transcript }
 }
+
+it('reports a scan cancelled mid-read as cancelled, and the next scan matches a cold one', async () => {
+  const { roots, transcript } = await writeClaudeFixture()
+  // Several stream chunks, so the cancel lands with most of the file unread.
+  const padding = Array.from({ length: 100 }, (_, index) => ({
+    type: 'user',
+    sessionId: 'claude-session',
+    timestamp: '2026-05-01T11:00:00.000Z',
+    message: { role: 'user', content: `${index} ${'x'.repeat(2_000)}` }
+  }))
+  await appendFile(transcript, `${jsonLines(padding)}\n`)
+  const recorder = recordingConsumer()
+  const controller = new AbortController()
+  const unregister = registerTranscriptConsumer({
+    beginRead: () => ({ message: () => controller.abort(), finish: () => {} })
+  })
+
+  await expect(
+    scanAiVaultSessions({ ...roots, platform: 'darwin', limit: 20, signal: controller.signal })
+  ).rejects.toSatisfy(isAiVaultScanCancelledError)
+  unregister()
+  expect(recorder.reads.map((read) => read.outcome)).toEqual([
+    expect.objectContaining({ incomplete: true, cancelled: true })
+  ])
+  expect(recorder.reads[0].messages.length).toBeLessThan(padding.length)
+
+  const next = await scanAiVaultSessions({ ...roots, platform: 'darwin', limit: 20 })
+  resetSessionParseCacheForTests()
+  const cold = await scanAiVaultSessions({ ...roots, platform: 'darwin', limit: 20 })
+  expect(next.issues).toEqual([])
+  expect(next.sessions).toEqual(cold.sessions)
+})
 
 it('delivers one message stream to every registered consumer', async () => {
   const { roots } = await writeClaudeFixture()
@@ -304,7 +343,7 @@ it('serializes overlapping parses of one path so no consumer read is orphaned', 
   expect(second?.messageCount).toBe(10)
 })
 
-it('reports a read whose parser cannot publish its messages as not complete', async () => {
+it('publishes an OpenCode SQLite session over the channel and reports it complete', async () => {
   const root = await mkdtemp(join(tmpdir(), 'orca-transcript-opencode-'))
   tempRoots.push(root)
   const dbPath = join(root, 'opencode.db')
@@ -327,8 +366,9 @@ it('reports a read whose parser cannot publish its messages as not complete', as
 
   expect(session).toEqual(OPENCODE_SQLITE_SESSION)
   expect(consumer.reads).toHaveLength(1)
-  expect(consumer.reads[0].messages).toEqual([])
-  expect(consumer.reads[0].outcome?.incomplete).toBe(true)
+  expect(consumer.reads[0].messages).toEqual(OPENCODE_SQLITE_MESSAGES)
+  expect(consumer.reads[0].outcome?.incomplete).toBe(false)
+  consumer.unregister()
 })
 
 it('reports the transcript size, not the cache key, as a whole-file read offset', async () => {

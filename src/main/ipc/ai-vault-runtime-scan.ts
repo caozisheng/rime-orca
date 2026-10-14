@@ -68,6 +68,9 @@ function runtimeScanArgs(
   listArgs: AiVaultListArgs | undefined
 ): AiVaultListArgs {
   const scanArgs: AiVaultListArgs = { executionHostScope: hostInfo.executionHostId }
+  if (listArgs?.afterFingerprint !== undefined) {
+    scanArgs.afterFingerprint = listArgs.afterFingerprint
+  }
   if (listArgs?.limit !== undefined) {
     scanArgs.limit = listArgs.limit
   }
@@ -79,6 +82,9 @@ function runtimeScanArgs(
   }
   if (listArgs?.scopePaths !== undefined) {
     scanArgs.scopePaths = listArgs.scopePaths
+  }
+  if (listArgs?.includeAntigravityIdeSessions === true) {
+    scanArgs.includeAntigravityIdeSessions = true
   }
   return scanArgs
 }

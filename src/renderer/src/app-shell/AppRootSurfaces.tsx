@@ -9,6 +9,7 @@ import { MarkdownTemplatePicker } from '../components/editor/MarkdownTemplatePic
 import RecentTabSwitcher from '../components/tab-bar/RecentTabSwitcher'
 import { SkillFreshnessUpdateDialog } from '../components/skills/SkillFreshnessUpdateDialog'
 import { StarNagCard } from '../components/StarNagCard'
+import { NativeChatResumeOnRestartModal } from '../components/NativeChatResumeOnRestartModal'
 import { StarNagAgentValueMomentObserver } from '../components/star-nag/StarNagAgentValueMomentObserver'
 import { StarNagToastHost } from '../components/star-nag/StarNagToastHost'
 import { TelemetryFirstLaunchSurface } from '../components/TelemetryFirstLaunchSurface'
@@ -41,6 +42,7 @@ const NonGitFolderDialog = lazy(() => import('../components/sidebar/NonGitFolder
 const AddProjectFromFolderDialog = lazy(
   () => import('../components/sidebar/AddProjectFromFolderDialog')
 )
+const DiagramViewerModal = lazy(() => import('../components/editor/DiagramViewerModal'))
 const ProjectAddedDialog = lazy(() => import('../components/sidebar/ProjectAddedDialog'))
 const DeleteWorktreeDialog = lazy(() => import('../components/sidebar/DeleteWorktreeDialog'))
 const PreservedBranchBatchReviewModal = lazy(
@@ -219,6 +221,12 @@ export function AppRootSurfaces(props: {
             <ProjectAddedDialog />
           </ModalBoundary>
         ) : null}
+        {/* Why: chat rows are virtualized, so the viewer must outlive the message that opened it. */}
+        {activeModal === 'diagram-viewer' ? (
+          <ModalBoundary boundaryId="modal.diagram-viewer" resetKey>
+            <DiagramViewerModal />
+          </ModalBoundary>
+        ) : null}
       </Suspense>
       {/* Why: root overlays can render Radix <Tooltip>s; keep inside the shared provider so lazy surfaces mount from any entry point. */}
       <Suspense fallback={null}>
@@ -296,6 +304,9 @@ export function AppRootSurfaces(props: {
           <StarNagCard />
         </OverlayBoundary>
       </NotificationCardStack>
+      <OverlayBoundary boundaryId="overlay.native-chat-resume-on-restart" resetKey={activeView}>
+        <NativeChatResumeOnRestartModal />
+      </OverlayBoundary>
       <OverlayBoundary boundaryId="overlay.star-nag-toast" resetKey={activeView}>
         <StarNagToastHost />
       </OverlayBoundary>

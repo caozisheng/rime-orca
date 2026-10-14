@@ -77,7 +77,9 @@ describe('OrcaRuntimeService', () => {
       '/tmp/workspaces/runtime-hook-test',
       'runtime-hook-test',
       'origin/main',
-      false
+      false,
+      false,
+      {}
     )
     expect(result).toEqual({
       worktree: expect.objectContaining({
@@ -93,16 +95,17 @@ describe('OrcaRuntimeService', () => {
         }
       }
     })
+    // Main never tried to start setup (no terminal host), so the window is handed nothing.
     expect(activateWorktree).toHaveBeenCalledWith(
       'repo-1',
       expect.any(String),
-      result.setup,
+      undefined,
       undefined,
       undefined
     )
   })
 
-  it('passes setup payloads through when explicitly activating CLI-created worktrees', async () => {
+  it('does not hand the window a setup main never tried to start', async () => {
     const runtime = new OrcaRuntimeService(store)
     const activateWorktree = vi.fn()
     runtime.setNotifier({
@@ -151,10 +154,12 @@ describe('OrcaRuntimeService', () => {
       activate: true
     })
 
+    expect(result.setup).toMatchObject({ runnerScriptPath: '/tmp/repo/.git/orca/setup-runner.sh' })
+    // Main never tried to start setup (no terminal host), so the window is handed nothing.
     expect(activateWorktree).toHaveBeenCalledWith(
       'repo-1',
       expect.any(String),
-      result.setup,
+      undefined,
       undefined,
       undefined
     )
@@ -231,10 +236,11 @@ describe('OrcaRuntimeService', () => {
       runnerScriptPath: 'C:\\repo\\.git\\orca\\setup-runner.sh',
       shell: { family: 'posix' }
     })
+    // Main never tried to start setup (no terminal host), so the window is handed nothing.
     expect(activateWorktree).toHaveBeenCalledWith(
       'repo-1',
       expect.any(String),
-      result.setup,
+      undefined,
       undefined,
       undefined
     )

@@ -8,7 +8,6 @@ import type {
 import type { RuntimeTerminalProcessInspection } from '@/runtime/runtime-terminal-inspection'
 import { dispatchTerminalNotification } from '@/components/terminal-pane/use-notification-dispatch'
 import { collectLeafIdsInOrder } from '@/components/terminal-pane/layout-serialization'
-import { createCodexAutoApprovalHookCompletionSuppressor } from '@/components/terminal-pane/codex-auto-approval-notification-suppression'
 import { dispatchAgentHookTerminalLifecycle } from '@/components/terminal-pane/agent-hook-terminal-lifecycle'
 import {
   isAgentHookCompletionTrackingEnabled,
@@ -237,7 +236,6 @@ function createCoordinator(paneKey: string, worktreeId: string): AgentCompletion
     paneKey,
     statusLane: 'hook',
     getPtyId: () => getPtyIdForPaneKey(paneKey),
-    getSettings: () => useAppStore.getState().settings,
     inspectProcess: async (): Promise<RuntimeTerminalProcessInspection> => ({
       foregroundProcess: null,
       hasChildProcesses: false
@@ -267,8 +265,7 @@ function createCoordinator(paneKey: string, worktreeId: string): AgentCompletion
         agentStatusSnapshot: meta.agentStatus
       })
     },
-    isLive: () => paneCanReceiveHookCompletion(paneKey),
-    shouldSuppressHookCompletion: createCodexAutoApprovalHookCompletionSuppressor(paneKey)
+    isLive: () => paneCanReceiveHookCompletion(paneKey)
   })
 }
 

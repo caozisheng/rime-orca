@@ -1,5 +1,6 @@
 import type { BrowserScreencastFrame } from './browser-screencast-protocol'
 import { DirectRpcClient } from './direct-rpc-client'
+import type { RpcEnvelopeFields } from './rpc-envelope-fields'
 import type { ConnectionLogSink, ConnectionState, ForegroundNudgeReason } from './types'
 import type { UnvalidatedRpcRequestPort } from './unvalidated-rpc-request-port'
 
@@ -9,6 +10,8 @@ export type { SendRequestOptions } from './unvalidated-rpc-request-port'
 
 type SubscribeOptions = {
   onBinaryFrame?: (frame: BrowserScreencastFrame) => void
+  /** Extra top-level wire fields, sent with the subscribe and every resend and unsubscribe of it. */
+  envelope?: RpcEnvelopeFields
 }
 
 type StreamingListener = (result: unknown) => void
@@ -30,6 +33,14 @@ export type RpcClient = UnvalidatedRpcRequestPort & {
   getReconnectAttempt: () => number
   getLastConnectedAt: () => number | null
   getLastInboundAt?: () => number | null
+  /**
+   * The logical authority epoch, advanced by `StableLogicalRpcClient.migrateTo`. Read-only and
+   * optional so a holder of a bare `RpcClient` can scope cached work to it without every
+   * implementation growing a counter it does not have.
+   */
+  getGeneration?: () => number
+  /** False when this transport would refuse an `envelope`; absent means it carries one. */
+  carriesRpcEnvelope?: () => boolean
   onStateChange: (listener: (state: ConnectionState) => void) => () => void
   notifyForeground: (reason?: ForegroundNudgeReason) => void
   /**

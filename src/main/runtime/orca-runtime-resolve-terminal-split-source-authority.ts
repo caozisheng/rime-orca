@@ -5,7 +5,7 @@ import {
   runtimeWorktreeIdsEqual
 } from './runtime-worktree-path-identity'
 import { makePaneKey } from '../../shared/stable-pane-id'
-import { terminalLayoutContainsLeaf } from './headless-terminal-split-layout'
+import { terminalLayoutContainsLeaf } from '../../shared/workspace-session-pane-ownership'
 import type {
   AgentTeamsTmuxCompatRequest,
   AgentTeamsTmuxCompatResponse
@@ -14,6 +14,7 @@ import {
   ensureClaudeAgentTeamsShimDir,
   resolveClaudeAgentTeamsShimBin
 } from './claude-agent-teams-shim-env'
+import { applyClaudeEnvPatch } from '../claude-accounts/environment'
 
 export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRuntimeWithSplitPtyBackedTerminal {
   protected resolveTerminalSplitSourceAuthority(
@@ -21,13 +22,21 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
     tabId: string,
     leafId: string,
     ptyId: string
-  ): {
-    persisted: boolean
-    rendererMounted: boolean
-    persistedWorktreeId: string | null
-    persistedIncarnationId: string | null
-    liveIncarnationId: string | null
-  } | null {
+  ):
+    | {
+        persisted: true
+        rendererRunsOtherPty: boolean
+        persistedWorktreeId: string | null
+        persistedIncarnationId: string | null
+        liveIncarnationId: string | null
+      }
+    | {
+        persisted: false
+        persistedWorktreeId: null
+        persistedIncarnationId: null
+        liveIncarnationId: string | null
+      }
+    | null {
     const session = this.getWorkspaceSessionForWorktree(worktreeId)
     const sessionWorktreeId = session ? resolveTerminalSessionWorktreeId(session, worktreeId) : null
     const persistedTab = sessionWorktreeId
@@ -53,17 +62,20 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
     )
     const rendererTab = this.tabs.get(tabId)
     const rendererLeaf = this.leaves.get(this.getLeafKey(tabId, leafId))
+    // A mounted pane can publish before its PTY binds; persisted identity fences that gap.
     const rendererMounted = Boolean(
       rendererTab &&
       rendererLeaf &&
       runtimeWorktreeIdsEqual(rendererTab.worktreeId, worktreeId) &&
       runtimeWorktreeIdsEqual(rendererLeaf.worktreeId, worktreeId) &&
-      rendererLeaf.ptyId === ptyId
+      (rendererLeaf.ptyId === ptyId || (persisted && rendererLeaf.ptyId === null))
     )
+    // Only a contradiction is trusted: the window's graph lags, so an unlisted pane proves nothing.
+    const rendererRunsOtherPty = Boolean(rendererLeaf?.ptyId && rendererLeaf.ptyId !== ptyId)
     if (persisted && persistedLayout) {
       return {
         persisted: true,
-        rendererMounted,
+        rendererRunsOtherPty,
         persistedWorktreeId: sessionWorktreeId,
         persistedIncarnationId,
         liveIncarnationId
@@ -86,7 +98,6 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
     }
     return {
       persisted: false,
-      rendererMounted,
       persistedWorktreeId: null,
       persistedIncarnationId: null,
       liveIncarnationId
@@ -99,7 +110,7 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
     return await this.claudeAgentTeams.handleTmuxCompat(request, {
       splitTerminal: (handle, opts) => this.splitTerminal(handle, opts),
       readTerminal: (handle, opts) => this.readTerminal(handle, opts),
-      sendTerminal: (handle, action) => this.sendTerminal(handle, action),
+      sendTerminal: (handle, action, options) => this.sendTerminal(handle, action, options),
       focusTerminal: (handle) => this.focusTerminal(handle),
       closeTerminal: (handle) => this.closeTerminal(handle),
       showTerminal: (handle) => this.showTerminal(handle)
@@ -109,6 +120,7 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
   async prepareClaudeAgentTeamsLeader(args: {
     paneKey: string
     baseEnv?: Record<string, string>
+    prepareAuth?: boolean
   }): Promise<{ env: Record<string, string> }> {
     const handle = this.getTerminalHandleForPaneKey(args.paneKey)
     if (!handle) {
@@ -116,26 +128,34 @@ export class OrcaRuntimeWithResolveTerminalSplitSourceAuthority extends OrcaRunt
     }
     return await this.prepareClaudeAgentTeamsLeaderForHandle({
       handle,
-      baseEnv: args.baseEnv
+      baseEnv: args.baseEnv,
+      prepareAuth: args.prepareAuth
     })
   }
 
   async prepareClaudeAgentTeamsLeaderForHandle(args: {
     handle: string
     baseEnv?: Record<string, string>
-  }): Promise<{ env: Record<string, string> }> {
+    prepareAuth?: boolean
+  }): Promise<{ env: Record<string, string>; envToDelete?: string[] }> {
     const baseEnv = {
       ...process.env,
       ...args.baseEnv
     }
+    const auth = args.prepareAuth && this.prepareClaudeAuth ? await this.prepareClaudeAuth() : null
+    if (auth) {
+      applyClaudeEnvPatch(baseEnv, auth.envPatch)
+    }
     const shimDir = await ensureClaudeAgentTeamsShimDir()
     const shimBin = resolveClaudeAgentTeamsShimBin(baseEnv)
-    return this.claudeAgentTeams.createLaunchEnv({
+    const launch = this.claudeAgentTeams.createLaunchEnv({
       leaderHandle: args.handle,
       baseEnv,
       shimDir,
       shimBin
     })
+    const env = auth ? { ...auth.envPatch, ...launch.env } : launch.env
+    return { env }
   }
 
   // Why: a leader handle that never binds to a PTY (lost pane race) has no exit

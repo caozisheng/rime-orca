@@ -1,11 +1,4 @@
-import {
-  DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  MAX_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  MIN_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  type SshConfigHostResolution,
-  type SshTarget
-} from '../../../../shared/ssh-types'
+import type { SshConfigHostResolution, SshTarget } from '../../../../shared/ssh-types'
 
 export type EditingTarget = {
   label: string
@@ -18,8 +11,7 @@ export type EditingTarget = {
   proxyCommand: string
   jumpHost: string
   systemSshConnectionReuse: boolean
-  relayGracePeriodSeconds: string
-  relayKeepAliveUntilReset: boolean
+  allowRemoteCliControl: boolean
 }
 
 export const EMPTY_FORM: EditingTarget = {
@@ -33,8 +25,7 @@ export const EMPTY_FORM: EditingTarget = {
   proxyCommand: '',
   jumpHost: '',
   systemSshConnectionReuse: true,
-  relayGracePeriodSeconds: String(DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS),
-  relayKeepAliveUntilReset: DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS === 0
+  allowRemoteCliControl: false
 }
 
 export function getEditingTargetForSshTarget(target: SshTarget): EditingTarget {
@@ -52,13 +43,7 @@ export function getEditingTargetForSshTarget(target: SshTarget): EditingTarget {
     proxyCommand: target.proxyCommand ?? '',
     jumpHost: target.jumpHost ?? '',
     systemSshConnectionReuse: target.systemSshConnectionReuse !== false,
-    relayGracePeriodSeconds: String(
-      target.relayGracePeriodSeconds === 0
-        ? DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS
-        : (target.relayGracePeriodSeconds ?? DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS)
-    ),
-    relayKeepAliveUntilReset:
-      (target.relayGracePeriodSeconds ?? DEFAULT_SSH_RELAY_GRACE_PERIOD_SECONDS) === 0
+    allowRemoteCliControl: target.allowRemoteCliControl === true
   }
 }
 
@@ -165,7 +150,8 @@ export function hasAdvancedConnectionValues(form: EditingTarget): boolean {
   return (
     form.proxyCommand.trim().length > 0 ||
     form.jumpHost.trim().length > 0 ||
-    !form.systemSshConnectionReuse
+    !form.systemSshConnectionReuse ||
+    form.allowRemoteCliControl
   )
 }
 
@@ -181,21 +167,7 @@ export function isSshTargetFormDirty(current: EditingTarget, baseline: EditingTa
     current.proxyCommand !== baseline.proxyCommand ||
     current.jumpHost !== baseline.jumpHost ||
     current.systemSshConnectionReuse !== baseline.systemSshConnectionReuse ||
-    current.relayGracePeriodSeconds !== baseline.relayGracePeriodSeconds ||
-    current.relayKeepAliveUntilReset !== baseline.relayKeepAliveUntilReset
-  )
-}
-
-export function parseRelayGracePeriodSeconds(draft: EditingTarget): number {
-  return draft.relayKeepAliveUntilReset ? 0 : Number.parseInt(draft.relayGracePeriodSeconds, 10)
-}
-
-export function isRelayGracePeriodValid(draft: EditingTarget, graceSeconds: number): boolean {
-  return (
-    draft.relayKeepAliveUntilReset ||
-    (!Number.isNaN(graceSeconds) &&
-      graceSeconds >= MIN_SSH_RELAY_GRACE_PERIOD_SECONDS &&
-      graceSeconds <= MAX_SSH_RELAY_GRACE_PERIOD_SECONDS)
+    current.allowRemoteCliControl !== baseline.allowRemoteCliControl
   )
 }
 

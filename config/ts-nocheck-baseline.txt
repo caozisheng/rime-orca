@@ -10,7 +10,6 @@ src/main/runtime/orca-runtime-apply-layout.ts
 src/main/runtime/orca-runtime-apply-mobile-display-mode.ts
 src/main/runtime/orca-runtime-apply-mobile-session-tab-navigation.ts
 src/main/runtime/orca-runtime-apply-tracked-pty-title.ts
-src/main/runtime/orca-runtime-attach-remote-terminal-source-range-consumer.ts
 src/main/runtime/orca-runtime-attach-window.ts
 src/main/runtime/orca-runtime-bind-pty-incarnation-handle.ts
 src/main/runtime/orca-runtime-build-headless-mobile-session-browser-tabs.ts
@@ -42,6 +41,7 @@ src/main/runtime/orca-runtime-get-agent-session-execution-namespace.ts
 src/main/runtime/orca-runtime-get-orchestration-dispatch-authority.ts
 src/main/runtime/orca-runtime-get-pty-record-for-pane-key.ts
 src/main/runtime/orca-runtime-get-runtime-id.ts
+src/main/runtime/orca-runtime-get-structured-agent-session-create-support.ts
 src/main/runtime/orca-runtime-get-terminal-interactive-wait.ts
 src/main/runtime/orca-runtime-get-unpersisted-tracked-title-for-pty.ts
 src/main/runtime/orca-runtime-get-worktree-ps.ts
@@ -63,6 +63,7 @@ src/main/runtime/orca-runtime-maybe-hydrate-headless-from-renderer.ts
 src/main/runtime/orca-runtime-merge-preserved-headless-mobile-session-tabs.ts
 src/main/runtime/orca-runtime-mobile-took-floor.ts
 src/main/runtime/orca-runtime-move-headless-mobile-session-tab.ts
+src/main/runtime/orca-runtime-notify-remote-terminal-view-presence-changed.ts
 src/main/runtime/orca-runtime-notify-ssh-state-changed.ts
 src/main/runtime/orca-runtime-on-client-disconnected.ts
 src/main/runtime/orca-runtime-on-pty-data.ts
@@ -75,7 +76,6 @@ src/main/runtime/orca-runtime-pick-most-recent-actor.ts
 src/main/runtime/orca-runtime-postlude.ts
 src/main/runtime/orca-runtime-prepare-pty-execution-context.ts
 src/main/runtime/orca-runtime-preserved-branch-cleanup.ts
-src/main/runtime/orca-runtime-prove-recovered-structured-tui-pty-process.ts
 src/main/runtime/orca-runtime-prune-mobile-session-tab-group-layout.ts
 src/main/runtime/orca-runtime-pty-foreground-process-reads.ts
 src/main/runtime/orca-runtime-publish-pty-backed-mobile-session-terminal.ts
@@ -96,7 +96,6 @@ src/main/runtime/orca-runtime-resolve-browser-network-execution-host-for-worktre
 src/main/runtime/orca-runtime-resolve-exit-waiters.ts
 src/main/runtime/orca-runtime-resolve-known-workspace-file-target.ts
 src/main/runtime/orca-runtime-resolve-mobile-session-terminal-command.ts
-src/main/runtime/orca-runtime-resolve-recovered-structured-tui-transcript.ts
 src/main/runtime/orca-runtime-resolve-terminal-pane.ts
 src/main/runtime/orca-runtime-resolve-terminal-split-source-authority.ts
 src/main/runtime/orca-runtime-resolve-waiter.ts
@@ -120,12 +119,8 @@ src/main/runtime/orca-runtime-state-fields.ts
 src/main/runtime/orca-runtime-stop-exact-terminals-for-worktree.ts
 src/main/runtime/orca-runtime-stop-explicitly-closed-tab-ptys.ts
 src/main/runtime/orca-runtime-stop-requested-pty-ids.ts
-src/main/runtime/orca-runtime-stop-structured-session-process.ts
 src/main/runtime/orca-runtime-stop-terminals-for-worktree.ts
 src/main/runtime/orca-runtime-stored-mobile-snapshot-has-stale-preserved-tab.ts
-src/main/runtime/orca-runtime-structured-agent-session-launch-tui.ts
-src/main/runtime/orca-runtime-structured-agent-session-recover-tui-owner.ts
-src/main/runtime/orca-runtime-structured-agent-session-reprove-tui-owner.ts
 src/main/runtime/orca-runtime-subscribe-to-terminal-resize.ts
 src/main/runtime/orca-runtime-sync-mobile-session-tabs.ts
 src/main/runtime/orca-runtime-sync-window-graph.ts
@@ -155,20 +150,13 @@ src/main/runtime/runtime-browser-commands-browser-tab-set-profile.ts
 src/main/runtime/runtime-browser-commands-list-logical-browser-tabs.ts
 src/main/runtime/runtime-browser-commands-state.ts
 src/main/runtime/runtime-file-command-host.ts
-src/main/runtime/runtime-file-commands-active-runtime-text-searches.ts
 src/main/runtime/runtime-file-commands-assert-remote-terminal-file-grant-path-still-canonical.ts
-src/main/runtime/runtime-file-commands-constructor.ts
 src/main/runtime/runtime-file-commands-create-file-explorer-dir-no-clobber.ts
 src/main/runtime/runtime-file-commands-mobile-file-list-limit.ts
 src/main/runtime/runtime-file-commands-read-file-explorer-preview.ts
-src/main/runtime/runtime-file-commands-read-mobile-file.ts
 src/main/runtime/runtime-file-commands-resolve-allowed-terminal-artifact-path.ts
 src/main/runtime/runtime-file-commands-resolve-terminal-path.ts
 src/main/runtime/runtime-file-commands-revoke-terminal-file-grants-for-client.ts
-src/main/runtime/runtime-file-commands-search-local-runtime-files.ts
-src/main/runtime/runtime-file-commands-search-remote-quick-open-file-paths.ts
-src/main/runtime/runtime-file-commands-search-runtime-files.ts
-src/main/runtime/runtime-file-commands-ssh-file-watcher-rearm.ts
 src/main/runtime/runtime-file-commands-terminal-artifact-access.ts
 src/main/runtime/runtime-file-commands-terminal-file-paths.ts
 src/main/runtime/runtime-file-commands-write-file-explorer-file.ts

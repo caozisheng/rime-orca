@@ -11,8 +11,8 @@ import { sessionSearchSqliteAvailable } from './session-search-sqlite-support'
  *
  * The desktop puts the index in that child because the child is where the
  * transcript reader runs, so one read serves both the session list and the index.
- * Neither of these hosts has that child: orcad ships only the watcher and daemon
- * entries beside `orcad.js`, and the relay's AI Vault sidecar runs the remote
+ * Neither host gives that child the index: orcad's scanner child gets no search
+ * data root and only lists sessions, and the relay's AI Vault sidecar runs the remote
  * scanner, which reads through a filesystem provider and publishes nothing to the
  * transcript channel. On both, the process that would drive the index's reads is
  * this one, and it is the only writer, so the two-process rebuild race the
@@ -28,7 +28,7 @@ export function installInProcessSessionSearchService(args: {
   resolveRoots?: SessionSearchIndexerOptions['resolveRoots']
   settings: AiVaultSearchSettings
   onError?: (error: unknown) => void
-}): { dispose(): void } | null {
+}): { apply(settings: AiVaultSearchSettings): void; dispose(): void } | null {
   if (!sessionSearchSqliteAvailable()) {
     return null
   }
@@ -40,11 +40,14 @@ export function installInProcessSessionSearchService(args: {
   })
   instance.apply(args.settings)
   setSessionSearchService({
-    search: (request) => instance.search(request),
+    search: (request, hostScope) => instance.search(request, hostScope),
     status: async () => instance.status(),
     reconcile: () => instance.reconcile()
   })
   return {
+    // Why exposed: on these hosts a settings write reaches the index through this
+    // object, there being no scanner child to forward a policy to.
+    apply: (settings) => instance.apply(settings),
     dispose: () => {
       setSessionSearchService(null)
       instance.close()

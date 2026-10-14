@@ -1,3 +1,4 @@
+import { getDefaultWorkspaceSession } from '../../../shared/constants'
 import { describe, expect, it, vi } from 'vitest'
 import {
   OrcaRuntimeService,
@@ -10,7 +11,11 @@ import {
   runHook,
   shouldRunSetupForCreate
 } from '../orca-runtime-test-mocks.spec'
-import { expectStablePaneKeyEnv, store } from '../orca-runtime-test-fixtures.spec'
+import {
+  expectStablePaneKeyEnv,
+  store,
+  makeRuntimeStoreWithWorkspaceSession
+} from '../orca-runtime-test-fixtures.spec'
 
 describe('OrcaRuntimeService', () => {
   it('sequences setup before startup for opted-in local headless worktree creates', async () => {
@@ -94,7 +99,13 @@ describe('OrcaRuntimeService', () => {
     expect(runHook).not.toHaveBeenCalled()
     expect(createTerminal).toHaveBeenCalledWith(
       `id:${result.worktree.id}`,
-      expect.objectContaining({ viewMode: 'chat' })
+      expect.objectContaining({ viewMode: 'chat' }),
+      expect.objectContaining({
+        id: result.worktree.id,
+        path: result.worktree.path,
+        repoId: result.worktree.repoId,
+        identity: result.worktree.identity
+      })
     )
     // Why: setup is provisioned fire-and-forget; the wait-for-setup guarantee comes from the shell nonce/marker, not JS spawn ordering.
     await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2))
@@ -511,7 +522,7 @@ describe('OrcaRuntimeService', () => {
 
   it('honors split setup placement for CLI-created worktrees without startup agents', async () => {
     const runtimeStore = {
-      ...store,
+      ...makeRuntimeStoreWithWorkspaceSession(getDefaultWorkspaceSession()).runtimeStore,
       getSettings: () => ({
         ...store.getSettings(),
         setupScriptLaunchMode: 'split-vertical' as const

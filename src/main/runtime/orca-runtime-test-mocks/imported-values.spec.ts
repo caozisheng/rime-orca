@@ -7,6 +7,7 @@ import {
   setRuntimeBrowserCommandsFactory,
   setRuntimeBrowserUnavailableCause
 } from '../runtime-browser-commands-factory'
+import { __cancelLegacyWorkerTerminalRecoveryRetriesForTests } from '../runtime-legacy-worker-terminal-recovery-controller'
 import { setRuntimeTerminalUnavailableCause } from '../native-terminal-availability'
 import { setRuntimeDesktopSurface } from '../runtime-desktop-surface'
 import { installFakeAppEnvironment } from '../../../../config/scripts/vitest-host-ports-setup'
@@ -48,7 +49,11 @@ import {
   getDefaultTabsLaunch,
   shouldRunSetupForCreate
 } from '../../effective-hook-config'
-import { getBaseRefDefault, getBranchConflictKind } from '../../git/repo'
+import {
+  getBaseRefDefault,
+  getBranchConflictKind,
+  resolveDefaultBaseRefWithLocalGit
+} from '../../git/repo'
 import { OrchestrationDb as RuntimeOrchestrationDb } from '../orchestration/db'
 import {
   AUTHORITATIVE_TERMINAL_SNAPSHOT_TIMEOUT_MS,
@@ -88,11 +93,6 @@ import {
 } from '../../../shared/agent-prompt-injection'
 import { CLIPBOARD_TEXT_MEASURE_YIELD_CODE_UNITS } from '../../../shared/clipboard-text'
 import { projectHostSetupProjectionFromRepos } from '../../../shared/project-host-setup-projection'
-import {
-  registerSshFilesystemProvider,
-  unregisterSshFilesystemProvider
-} from '../../providers/ssh-filesystem-dispatch'
-import { registerSshGitProvider, unregisterSshGitProvider } from '../../providers/ssh-git-dispatch'
 import {
   registerPty as registerLocalPtyMemoryRow,
   unregisterPty as unregisterLocalPtyMemoryRow
@@ -174,6 +174,8 @@ export const exportedBeforeEach = beforeEach
 export const exportedBeginWatcherInstall = beginWatcherInstall
 export const exportedBuildAgentPromptPasteBytes = buildAgentPromptPasteBytes
 export const exportedBuildPreview = buildPreview
+export const exportedCancelLegacyWorkerTerminalRecoveryRetriesForTests =
+  __cancelLegacyWorkerTerminalRecoveryRetriesForTests
 export const exportedClearConfiguredWorktreeSharedDirectoriesCacheForTests =
   clearConfiguredWorktreeSharedDirectoriesCacheForTests
 export const exportedClearSubmodulePathsCacheForTests = clearSubmodulePathsCacheForTests
@@ -216,7 +218,7 @@ export const exportedMakePaneKey = makePaneKey
 export const exportedMkdir = mkdir
 export const exportedMkdirSync = mkdirSync
 export const exportedMkdtemp = mkdtemp
-export const exportedOnTestFinished = onTestFinished
+export const exportedOnTestFinished: typeof onTestFinished = onTestFinished
 export const exportedParseOrcaYaml = parseOrcaYaml
 export const exportedPerformance = performance
 export const exportedProjectHostSetupProjectionFromRepos = projectHostSetupProjectionFromRepos
@@ -225,8 +227,6 @@ export const exportedRecentTerminalOutputIncludesPath = recentTerminalOutputIncl
 export const exportedRecentTerminalPathCandidatesIncludePath =
   recentTerminalPathCandidatesIncludePath
 export const exportedRegisterLocalPtyMemoryRow = registerLocalPtyMemoryRow
-export const exportedRegisterSshFilesystemProvider = registerSshFilesystemProvider
-export const exportedRegisterSshGitProvider = registerSshGitProvider
 export const exportedRemoveWorktree = removeWorktree
 export const exportedResolveSetupRunnerShell = resolveSetupRunnerShell
 export const exportedResolveWorktreeScanCacheTtlMs = resolveWorktreeScanCacheTtlMs
@@ -242,9 +242,9 @@ export const exportedSetWorktreeWatcherRemoval = setWorktreeWatcherRemoval
 export const exportedShouldRunSetupForCreate = shouldRunSetupForCreate
 export const exportedTmpdir = tmpdir
 export const exportedUnregisterLocalPtyMemoryRow = unregisterLocalPtyMemoryRow
-export const exportedUnregisterSshFilesystemProvider = unregisterSshFilesystemProvider
-export const exportedUnregisterSshGitProvider = unregisterSshGitProvider
 export const exportedVi = vi
 export const exportedWin32 = win32
 export const exportedWorktreePathComparison = worktreePathComparison
 export const exportedWriteFile = writeFile
+
+export const exportedResolveDefaultBaseRefWithLocalGit = resolveDefaultBaseRefWithLocalGit

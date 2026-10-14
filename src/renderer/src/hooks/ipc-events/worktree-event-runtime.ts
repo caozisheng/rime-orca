@@ -1,8 +1,17 @@
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
-import { LOCAL_EXECUTION_HOST_ID, type ExecutionHostId } from '../../../../shared/execution-host'
+import {
+  LOCAL_EXECUTION_HOST_ID,
+  parseExecutionHostId,
+  type ExecutionHostId
+} from '../../../../shared/execution-host'
 import type { RuntimeClientEvent } from '../../../../shared/runtime-client-events'
+import { isNewWorkspaceSetupOnlyDefault } from '../../../../shared/new-workspace-setup-only'
 import type { AppState } from '../../store/types'
 import { useAppStore } from '../../store'
+import {
+  invalidateRemoteWorktreeLineage,
+  isRemoteWorktreeLineageFresh
+} from '../../store/slices/worktrees/metadata/worktree-lineage-readiness'
 import {
   createWorktreeChangeRefreshQueue,
   type WorktreeChangeRefreshQueue
@@ -21,11 +30,17 @@ function getVisibleWorktreeIdsForRepo(state: AppState, repoId: string): Set<stri
   return new Set((state.worktreesByRepo[repoId] ?? []).map((worktree) => worktree.id))
 }
 
+type WorktreeEventActivationOptions = {
+  allowRuntimeEnvironment: boolean
+  executionHostId?: ExecutionHostId
+  isCurrent?: () => boolean
+}
+
 export type WorktreeEventRuntime = {
   worktreeChangeRefreshQueue: WorktreeChangeRefreshQueue
   activateNotifiedWorktree: (
     event: Extract<RuntimeClientEvent, { type: 'activateWorktree' }>,
-    options: { allowRuntimeEnvironment: boolean }
+    options: WorktreeEventActivationOptions
   ) => Promise<void>
 }
 
@@ -36,7 +51,11 @@ export function createWorktreeEventRuntime(
   const handleWorktreesChanged = async (
     repoId: string,
     renamed?: { oldWorktreeId: string; newWorktreeId: string },
-    options?: { forceLocalOwner?: boolean; executionHostId?: ExecutionHostId }
+    options?: {
+      forceLocalOwner?: boolean
+      executionHostId?: ExecutionHostId
+      sortOrderOnly?: boolean
+    }
   ): Promise<void> => {
     const localRefreshStartedWithRuntime =
       options?.forceLocalOwner === true && isRuntimeEnvironmentActive()
@@ -66,15 +85,24 @@ export function createWorktreeEventRuntime(
             }
           : undefined
     )
-    await useAppStore
-      .getState()
-      .fetchWorktreeLineage(
-        options?.forceLocalOwner
-          ? { forceLocalOwner: true }
-          : options?.executionHostId
-            ? { executionHostId: options.executionHostId }
-            : undefined
-      )
+    const lineageOwner = parseExecutionHostId(options?.executionHostId)
+    if (
+      options?.sortOrderOnly !== true ||
+      lineageOwner?.kind !== 'runtime' ||
+      renamed ||
+      options.forceLocalOwner ||
+      !isRemoteWorktreeLineageFresh(useAppStore.getState, lineageOwner.environmentId)
+    ) {
+      await useAppStore
+        .getState()
+        .fetchWorktreeLineage(
+          options?.forceLocalOwner
+            ? { forceLocalOwner: true }
+            : options?.executionHostId
+              ? { executionHostId: options.executionHostId }
+              : undefined
+        )
+    }
     // Why: an id change unmounts the active pane; re-activate so the tab reconciles, else it vanishes until re-select.
     if (renamedWasActive && renamed) {
       useAppStore.getState().setActiveWorktree(renamed.newWorktreeId)
@@ -129,7 +157,24 @@ export function createWorktreeEventRuntime(
       afterState.removeWorkspaceSpaceWorktrees(removed)
     }
   }
-  const worktreeChangeRefreshQueue = createWorktreeChangeRefreshQueue(handleWorktreesChanged)
+  const refreshQueue = createWorktreeChangeRefreshQueue(handleWorktreesChanged)
+  let disposed = false
+  const worktreeChangeRefreshQueue: WorktreeChangeRefreshQueue = {
+    dispose() {
+      disposed = true
+      refreshQueue.dispose()
+    },
+    enqueue(event) {
+      if (disposed) {
+        return
+      }
+      const owner = parseExecutionHostId(event.executionHostId)
+      if (owner?.kind === 'runtime' && (event.sortOrderOnly !== true || event.renamed)) {
+        invalidateRemoteWorktreeLineage(useAppStore.getState, owner.environmentId)
+      }
+      refreshQueue.enqueue(event)
+    }
+  }
   unsubs.push(worktreeChangeRefreshQueue.dispose)
 
   const activateNotifiedWorktree = async (
@@ -140,24 +185,42 @@ export function createWorktreeEventRuntime(
       startup,
       defaultTabs
     }: Extract<RuntimeClientEvent, { type: 'activateWorktree' }>,
-    options: { allowRuntimeEnvironment: boolean }
+    options: WorktreeEventActivationOptions
   ): Promise<void> => {
+    if (options.isCurrent?.() === false) {
+      return
+    }
     if (!options.allowRuntimeEnvironment && isRuntimeEnvironmentActive()) {
       // Why: local CLI worktree events carry local ids; runtime activation comes via the remote stream, allowed separately.
       return
     }
-    const existedBeforeFetch = Boolean(useAppStore.getState().getKnownWorktreeById(worktreeId))
+    const existedBeforeFetch = Boolean(
+      useAppStore.getState().getKnownWorktreeById(worktreeId, options.executionHostId)
+    )
     // Why: fetch first so activation can resolve the CLI-created worktree; it arrived from main, not yet in renderer state.
-    await useAppStore.getState().fetchWorktrees(repoId)
-    const existsAfterFetch = Boolean(useAppStore.getState().getKnownWorktreeById(worktreeId))
+    await (options.executionHostId
+      ? useAppStore.getState().fetchWorktrees(repoId, { executionHostId: options.executionHostId })
+      : useAppStore.getState().fetchWorktrees(repoId))
+    // A connection or bridge replacement during discovery revokes this navigation.
+    if (options.isCurrent?.() === false) {
+      return
+    }
+    const existsAfterFetch = Boolean(
+      useAppStore.getState().getKnownWorktreeById(worktreeId, options.executionHostId)
+    )
     // Why: use the canonical activation path so the CLI switch records a back/forward visit, or the nav buttons ignore it.
     activateAndRevealWorktree(worktreeId, {
       ...(setup ? { setup } : {}),
       ...(startup ? { startup } : {}),
       ...(defaultTabs ? { defaultTabs } : {}),
+      // Why: CLI creates carry no agent choice, so the "None" default decides whether a shell joins Setup.
+      ...(setup && !startup && isNewWorkspaceSetupOnlyDefault(useAppStore.getState().settings)
+        ? { providesInitialSurface: true }
+        : {}),
       ...(!existedBeforeFetch && existsAfterFetch ? { sidebarRevealBehavior: 'auto' } : {}),
       // Why: this activation came from the host runtime stream; echoing it back can create a selection loop.
-      notifyHostRuntime: false
+      notifyHostRuntime: false,
+      ...(options.executionHostId ? { executionHostId: options.executionHostId } : {})
     })
   }
 

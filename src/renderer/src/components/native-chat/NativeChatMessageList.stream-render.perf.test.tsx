@@ -4,7 +4,7 @@ import '@testing-library/jest-dom/vitest'
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type * as NativeChatProseModule from './native-chat-prose'
+import type * as NativeChatProseModule from '../../../../shared/native-chat-prose'
 import type { NativeChatMessage } from '../../../../shared/native-chat-types'
 import { projectStructuredAgentSessionMessages } from '../../../../shared/structured-agent-session-message-projection'
 import type { AgentJournalRenderItem } from '../../../../shared/agent-session-journal-types'
@@ -15,7 +15,7 @@ import { installNativeChatMessageListTestViewport } from './native-chat-message-
 // Counting real per-row work rather than a render counter: a future refactor could keep the
 // render count low while still re-deriving every row's markdown.
 const proseCalls = vi.hoisted(() => ({ count: 0 }))
-vi.mock('./native-chat-prose', async (importOriginal) => {
+vi.mock('../../../../shared/native-chat-prose', async (importOriginal) => {
   const actual = await importOriginal<typeof NativeChatProseModule>()
   return {
     ...actual,
@@ -71,6 +71,7 @@ function sessionWith(messages: NativeChatMessage[]): NativeChatLiveSession {
     agent: 'codex',
     hasMore: false,
     loadingEarlier: false,
+    olderHistoryGeneration: 0,
     loadEarlier: vi.fn(),
     readPhase: 'ready'
   }
@@ -84,7 +85,6 @@ describe('native chat transcript re-render cost during a streaming turn', () => 
         session={sessionWith(messages)}
         isWorking={true}
         expandSignal={false}
-        fontScale={1}
       />
     )
 
@@ -103,7 +103,6 @@ describe('native chat transcript re-render cost during a streaming turn', () => 
           session={sessionWith(streaming)}
           isWorking={true}
           expandSignal={false}
-          fontScale={1}
         />
       )
     }
@@ -146,7 +145,6 @@ describe('native chat transcript re-render cost during a streaming turn', () => 
         journalItems={items}
         isWorking={false}
         expandSignal={false}
-        fontScale={1}
       />
     )
     const { rerender } = render(view([user, diff]))
@@ -173,6 +171,11 @@ describe('native chat transcript re-render cost during a streaming turn', () => 
     expect(patchCalls).toEqual({ summary: 1, detailed: 0 })
     fireEvent.click(screen.getByRole('button', { name: /1 changed file/ }))
     expect(patchCalls.detailed).toBe(0)
+    expect(screen.queryByText('Totals from recorded edits in this turn.')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show diff' }))
+    expect(patchCalls).toEqual({ summary: 1, detailed: 1 })
+    expect(screen.getByText('new')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Hide diff' }))
     fireEvent.click(screen.getByRole('button', { name: /src\/a.ts/ }))
     expect(patchCalls).toEqual({ summary: 1, detailed: 1 })
     expect(screen.getByText('new')).toBeInTheDocument()

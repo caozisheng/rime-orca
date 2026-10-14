@@ -1,3 +1,4 @@
+import '../unused-default-rpc-methods.test-fixture'
 import { describe, expect, it, vi } from 'vitest'
 import {
   AGENT_SESSION_HOST_AUTHORITY_RUNTIME_CAPABILITY,
@@ -236,7 +237,6 @@ describe('agent session RPC methods', () => {
       launchAgent: 'codex',
       title: undefined,
       focus: false,
-      rendererBacked: false,
       activate: false,
       presentation: undefined,
       tabId: undefined,

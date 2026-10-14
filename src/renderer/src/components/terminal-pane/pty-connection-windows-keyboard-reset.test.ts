@@ -142,14 +142,14 @@ function notifyStoreSubscribers(): void {
 }
 
 describe('connectPanePty', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
     transportFactoryQueue = []
     createdTransportOptions = []
     storeSubscribers = []
     mockStoreState = createInitialStoreState(() => mockStoreState)
-    installTerminalTestGlobals()
+    await installTerminalTestGlobals()
   })
 
   afterEach(async () => {
@@ -182,7 +182,7 @@ describe('connectPanePty', () => {
     )
   })
 
-  it('resets stale keyboard state when a native Windows agent becomes idle', async () => {
+  it('keeps kitty keyboard state when a native Windows agent becomes idle', async () => {
     const restoreUserAgent = temporarilySetNavigatorUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     )
@@ -206,44 +206,7 @@ describe('connectPanePty', () => {
 
       idleHandler('* Codex done')
 
-      expect(pane.terminal.write).toHaveBeenCalledWith(
-        `${RESET_TERMINAL_CURSOR_STYLE}${RESET_KITTY_KEYBOARD_PROTOCOL}`,
-        expect.any(Function)
-      )
-    } finally {
-      restoreUserAgent()
-    }
-  })
-
-  it('keeps SSH agent idle reset cursor-only on Windows clients', async () => {
-    const restoreUserAgent = temporarilySetNavigatorUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-    )
-    const { connectPanePty } = await import('./pty-connection')
-    const transport = createMockTransport()
-    transportFactoryQueue.push(transport)
-
-    try {
-      mockStoreState = {
-        ...mockStoreState,
-        repos: [{ id: 'repo1', connectionId: 'conn-1' }],
-        sshConnectionStates: new Map([['conn-1', { status: 'connected' }]])
-      } as StoreState
-      const pane = createPane(1)
-      const manager = createManager(1)
-      const deps = createDeps()
-
-      connectPanePty(pane as never, manager as never, deps as never)
-
-      const idleHandler = createdTransportOptions[0]?.onAgentBecameIdle as
-        | ((title: string) => void)
-        | undefined
-      if (!idleHandler) {
-        throw new Error('Expected onAgentBecameIdle to be registered')
-      }
-
-      idleHandler('* Codex done')
-
+      // Why: a finished turn is not a dead app; its kitty flags stay until the host sees it exit.
       expect(pane.terminal.write).toHaveBeenCalledWith(
         RESET_TERMINAL_CURSOR_STYLE,
         expect.any(Function)
@@ -252,9 +215,6 @@ describe('connectPanePty', () => {
         `${RESET_TERMINAL_CURSOR_STYLE}${RESET_KITTY_KEYBOARD_PROTOCOL}`,
         expect.any(Function)
       )
-      transport.sendInput.mockClear()
-      sendTerminalInputThroughPane(pane, '\x1b[I')
-      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I')
     } finally {
       restoreUserAgent()
     }
@@ -311,14 +271,14 @@ describe('connectPanePty', () => {
         )
         transport.sendInput.mockClear()
         sendTerminalInputThroughPane(pane, '\x1b[I')
-        expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I')
+        expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I', 'query-reply')
       } finally {
         restoreUserAgent()
       }
     }
   )
 
-  it('resets stale keyboard state when native Windows hook status reaches done', async () => {
+  it('resets cursor style when native Windows hook status reaches done', async () => {
     const restoreUserAgent = temporarilySetNavigatorUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     )
@@ -359,7 +319,7 @@ describe('connectPanePty', () => {
       notifyStoreSubscribers()
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        `${RESET_TERMINAL_CURSOR_STYLE}${RESET_KITTY_KEYBOARD_PROTOCOL}`,
+        RESET_TERMINAL_CURSOR_STYLE,
         expect.any(Function)
       )
     } finally {
@@ -367,7 +327,7 @@ describe('connectPanePty', () => {
     }
   })
 
-  it('resets stale keyboard state when a batched done→working→done burst lands as one publication', async () => {
+  it('resets cursor style when a batched done→working→done burst lands as one publication', async () => {
     const restoreUserAgent = temporarilySetNavigatorUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     )
@@ -413,7 +373,7 @@ describe('connectPanePty', () => {
       notifyStoreSubscribers()
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        `${RESET_TERMINAL_CURSOR_STYLE}${RESET_KITTY_KEYBOARD_PROTOCOL}`,
+        RESET_TERMINAL_CURSOR_STYLE,
         expect.any(Function)
       )
     } finally {
@@ -421,7 +381,7 @@ describe('connectPanePty', () => {
     }
   })
 
-  it('resets stale keyboard state when a batched burst ends on working after a completed turn', async () => {
+  it('resets cursor style when a batched burst ends on working after a completed turn', async () => {
     const restoreUserAgent = temporarilySetNavigatorUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     )
@@ -464,7 +424,7 @@ describe('connectPanePty', () => {
       notifyStoreSubscribers()
 
       expect(pane.terminal.write).toHaveBeenCalledWith(
-        `${RESET_TERMINAL_CURSOR_STYLE}${RESET_KITTY_KEYBOARD_PROTOCOL}`,
+        RESET_TERMINAL_CURSOR_STYLE,
         expect.any(Function)
       )
     } finally {
@@ -472,7 +432,7 @@ describe('connectPanePty', () => {
     }
   })
 
-  it('keeps native Windows same-turn done repaints from re-resetting keyboard state', async () => {
+  it('keeps native Windows same-turn done repaints from re-resetting cursor style', async () => {
     const restoreUserAgent = temporarilySetNavigatorUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     )
@@ -568,7 +528,7 @@ describe('connectPanePty', () => {
       notifyStoreSubscribers()
 
       sendTerminalInputThroughPane(pane, '\x1b[I')
-      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I')
+      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I', 'query-reply')
     } finally {
       restoreUserAgent()
     }
@@ -621,8 +581,8 @@ describe('connectPanePty', () => {
         sendTerminalInputThroughPane(pane, '\x1b[O')
         sendTerminalInputThroughPane(pane, '\x1b[I')
 
-        expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x1b[O')
-        expect(transport.sendInput).toHaveBeenNthCalledWith(2, '\x1b[I')
+        expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x1b[O', 'query-reply')
+        expect(transport.sendInput).toHaveBeenNthCalledWith(2, '\x1b[I', 'query-reply')
       } finally {
         restoreUserAgent()
       }
@@ -667,8 +627,8 @@ describe('connectPanePty', () => {
 
       sendTerminalInputThroughPane(pane, '\x7f')
       sendTerminalInputThroughPane(pane, 'x')
-      expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x7f')
-      expect(transport.sendInput).toHaveBeenNthCalledWith(2, 'x')
+      expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x7f', 'query-reply')
+      expect(transport.sendInput).toHaveBeenNthCalledWith(2, 'x', 'query-reply')
       expect(pane.terminal.modes.sendFocusMode).toBe(true)
 
       mockStoreState.agentStatusByPaneKey[paneKey] = {
@@ -679,7 +639,7 @@ describe('connectPanePty', () => {
       transport.sendInput.mockClear()
 
       sendTerminalInputThroughPane(pane, '\x1b[I')
-      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I')
+      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[I', 'query-reply')
       expect(pane.terminal.modes.sendFocusMode).toBe(true)
 
       mockStoreState.agentStatusByPaneKey[paneKey] = {
@@ -689,7 +649,7 @@ describe('connectPanePty', () => {
       notifyStoreSubscribers()
       transport.sendInput.mockClear()
       sendTerminalInputThroughPane(pane, '\x1b[O')
-      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[O')
+      expect(transport.sendInput).toHaveBeenCalledWith('\x1b[O', 'query-reply')
     } finally {
       restoreUserAgent()
     }
@@ -725,8 +685,8 @@ describe('connectPanePty', () => {
       sendTerminalInputThroughPane(pane, '\x1b[O')
       sendTerminalInputThroughPane(pane, '\x1b[I')
 
-      expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x1b[O')
-      expect(transport.sendInput).toHaveBeenNthCalledWith(2, '\x1b[I')
+      expect(transport.sendInput).toHaveBeenNthCalledWith(1, '\x1b[O', 'query-reply')
+      expect(transport.sendInput).toHaveBeenNthCalledWith(2, '\x1b[I', 'query-reply')
       expect(pane.terminal.modes.sendFocusMode).toBe(true)
     } finally {
       restoreUserAgent()

@@ -1,7 +1,9 @@
+import type * as ExecCommandModule from './ssh-relay-exec-command'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SshConnection } from './ssh-connection'
 
-vi.mock('./ssh-relay-deploy-helpers', () => ({
+vi.mock('./ssh-relay-exec-command', async (importOriginal) => ({
+  ...(await importOriginal<typeof ExecCommandModule>()),
   execCommand: vi.fn(),
   isUnconfirmedSshCommandTermination: (error: unknown) =>
     error instanceof Error &&
@@ -13,8 +15,8 @@ vi.mock('./ssh-relay-gc-claim', () => ({
   waitForRelayGcClaimRelease: vi.fn().mockResolvedValue(undefined)
 }))
 
-import { execCommand } from './ssh-relay-deploy-helpers'
-import { acquireInstallLock } from './ssh-relay-install-lock'
+import { execCommand } from './ssh-relay-exec-command'
+import { acquireInstallLock, RemoteInstallLockBusyError } from './ssh-relay-install-lock'
 import { getRemoteHostPlatform } from './ssh-remote-platform'
 
 describe('acquireInstallLock', () => {
@@ -45,5 +47,48 @@ describe('acquireInstallLock', () => {
         { signal: controller.signal }
       )
     ).rejects.toBe(termination)
+  })
+
+  it.each([
+    [true, 'OK'],
+    [false, 'BUSY']
+  ])('steals a stale lock only when takeover is allowed (%s)', async (allow, expected) => {
+    vi.mocked(execCommand).mockImplementation(async (_conn, command) => {
+      if (command.includes('.steal')) {
+        return 'OK'
+      }
+      return command.includes('mkdir -p') ? '' : 'BUSY'
+    })
+    const acquired = acquireInstallLock(
+      {} as SshConnection,
+      '/home/u/.orca-remote/.orcad-activation-transaction',
+      getRemoteHostPlatform('linux-x64'),
+      { relayGcClaim: false, allowStaleTakeover: allow, waitTimeoutMs: 0 }
+    ).then(
+      () => 'OK',
+      (error: unknown) => (error instanceof RemoteInstallLockBusyError ? 'BUSY' : String(error))
+    )
+    expect(await acquired).toBe(expected)
+    expect(
+      vi.mocked(execCommand).mock.calls.some(([, command]) => command.includes('.steal'))
+    ).toBe(allow)
+  })
+
+  it('reports a lock command that only ever failed as that error, never as a busy fence', async () => {
+    const refused = new Error('channel open failure: administratively prohibited')
+    vi.mocked(execCommand).mockImplementation(async (_conn, command) => {
+      if (command.includes('mkdir -p')) {
+        return ''
+      }
+      throw refused
+    })
+    await expect(
+      acquireInstallLock(
+        {} as SshConnection,
+        '/home/u/.orca-remote/.orcad-activation-transaction',
+        getRemoteHostPlatform('linux-x64'),
+        { relayGcClaim: false, allowStaleTakeover: false, waitTimeoutMs: 0 }
+      )
+    ).rejects.toBe(refused)
   })
 })

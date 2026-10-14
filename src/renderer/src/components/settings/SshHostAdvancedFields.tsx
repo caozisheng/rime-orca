@@ -1,9 +1,4 @@
 import { ChevronDown } from 'lucide-react'
-import {
-  DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  MAX_SSH_RELAY_GRACE_PERIOD_SECONDS,
-  MIN_SSH_RELAY_GRACE_PERIOD_SECONDS
-} from '../../../../shared/ssh-types'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
@@ -117,61 +112,31 @@ export function SshHostAdvancedFields({
             <div className="min-w-0 flex-1 space-y-0.5">
               <Label className="text-xs font-medium">
                 {translate(
-                  'auto.components.settings.SshTargetForm.71fc546097',
-                  'Keep terminals alive until reset'
+                  'auto.components.settings.SshTargetForm.allowRemoteCliControl',
+                  "Allow this host's orca CLI to control Orca"
                 )}
               </Label>
               <p className="text-muted-foreground">
                 {translate(
-                  'auto.components.settings.SshTargetForm.b574994adc',
-                  'Use End Remote Terminals or Reset Relay when you want to stop them.'
+                  'auto.components.settings.SshTargetForm.allowRemoteCliControlHelp',
+                  'When off, orca commands run on this host reach only its own terminals. Turn on to let them reach other hosts, orchestration, files, and integrations on this computer.'
                 )}
               </p>
             </div>
             <SettingsSwitch
-              checked={form.relayKeepAliveUntilReset}
+              checked={form.allowRemoteCliControl}
               disabled={disabled}
               onChange={() =>
                 onFormChange((f) => ({
                   ...f,
-                  relayKeepAliveUntilReset: !f.relayKeepAliveUntilReset
+                  allowRemoteCliControl: !f.allowRemoteCliControl
                 }))
               }
               ariaLabel={translate(
-                'auto.components.settings.SshTargetForm.71fc546097',
-                'Keep terminals alive until reset'
+                'auto.components.settings.SshTargetForm.allowRemoteCliControl',
+                "Allow this host's orca CLI to control Orca"
               )}
             />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="add-ssh-relay-grace-period" className="text-xs text-muted-foreground">
-              {translate(
-                'auto.components.settings.SshTargetForm.55c56cf2c7',
-                'Timeout after disconnect (seconds)'
-              )}
-            </Label>
-            <Input
-              id="add-ssh-relay-grace-period"
-              type={form.relayKeepAliveUntilReset ? 'text' : 'number'}
-              value={
-                form.relayKeepAliveUntilReset
-                  ? translate('auto.components.settings.SshTargetForm.7c13f58c91', 'Until reset')
-                  : form.relayGracePeriodSeconds
-              }
-              disabled={disabled || form.relayKeepAliveUntilReset}
-              onChange={(e) =>
-                onFormChange((f) => ({ ...f, relayGracePeriodSeconds: e.target.value }))
-              }
-              placeholder={String(DEFAULT_BOUNDED_SSH_RELAY_GRACE_PERIOD_SECONDS)}
-              min={MIN_SSH_RELAY_GRACE_PERIOD_SECONDS}
-              max={MAX_SSH_RELAY_GRACE_PERIOD_SECONDS}
-            />
-            <p className="text-[11px] text-muted-foreground">
-              {translate(
-                'auto.components.settings.SshTargetForm.1b19b00e93',
-                'Bounded timeouts must be between 60 seconds and 7 days.'
-              )}
-            </p>
           </div>
         </div>
       </CollapsibleContent>

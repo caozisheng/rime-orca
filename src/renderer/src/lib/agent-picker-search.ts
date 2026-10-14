@@ -10,7 +10,7 @@ type RankedAgent = {
 const NO_MATCH = Number.POSITIVE_INFINITY
 export const AGENT_PICKER_QUERY_MAX_BYTES = 2 * 1024
 
-export function isAgentPickerQueryTooLarge(
+function isAgentPickerQueryTooLarge(
   query: string,
   maxBytes = AGENT_PICKER_QUERY_MAX_BYTES
 ): boolean {
@@ -83,23 +83,43 @@ export function agentPickerBlankTerminalMatches(rawQuery: string): boolean {
   )
 }
 
-function scoreAgent(agent: AgentCatalogEntry, query: string): number {
-  return Math.min(
-    scoreCandidate(query, agent.label, 0),
-    scoreCandidate(query, agent.id, 600),
-    scoreCandidate(query, agent.cmd, 650),
-    ...(agent.searchAliases ?? []).map((alias) => scoreCandidate(query, alias, 650))
+export function agentPickerSetupOnlyMatches(rawQuery: string): boolean {
+  const query = getAgentPickerSearchQuery(rawQuery)
+  if (query === null) {
+    return false
+  }
+  if (!query) {
+    return true
+  }
+
+  return (
+    scoreCandidate(query, 'None', 0) !== NO_MATCH ||
+    scoreCandidate(query, 'setup script only', 0) !== NO_MATCH
   )
 }
 
-function scoreCandidate(query: string, rawCandidate: string, baseScore: number): number {
+function scoreAgent(agent: AgentCatalogEntry, query: string): number {
+  return Math.min(
+    scoreCandidate(query, agent.label, 0),
+    scoreCandidate(query, agent.id, 600, 1),
+    scoreCandidate(query, agent.cmd, 650, 2),
+    ...(agent.searchAliases ?? []).map((alias) => scoreCandidate(query, alias, 650, 2))
+  )
+}
+
+function scoreCandidate(
+  query: string,
+  rawCandidate: string,
+  baseScore: number,
+  exactScore = baseScore
+): number {
   const candidate = normalizeSearchText(rawCandidate)
   if (!candidate) {
     return NO_MATCH
   }
 
   if (candidate === query) {
-    return baseScore
+    return exactScore
   }
   if (candidate.startsWith(query)) {
     return baseScore + 10

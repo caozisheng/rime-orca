@@ -2,10 +2,11 @@ import type { AiVaultSession } from '../../shared/ai-vault-types'
 import type { ResumableSessionParseState } from './session-scanner-types'
 import type { SessionSidecarObservation } from './session-sidecar-stat'
 import type { TranscriptMessageChannel } from './session-transcript-channel'
+import type { SkippedTranscriptRecord } from './session-transcript-record-budget'
 
 // Sized past the default recency cap (1000) plus the in-scope cap (2000) so a
 // full steady-state result set stays resident between forced rescans.
-const MAX_CACHE_ENTRIES = 4096
+export const MAX_CACHE_ENTRIES = 4096
 
 export type SessionParseResumePoint = {
   state: ResumableSessionParseState
@@ -17,6 +18,9 @@ export type SessionParseResumePoint = {
   // Bound to the cached state, which keeps the reference its parsers were built
   // with; a resumed read re-points this channel instead of replacing it.
   channel: TranscriptMessageChannel
+  // Records this fold dropped for exceeding the per-record budget, accumulated
+  // across resumes. Lives with the fold, so a whole-file re-read starts clean.
+  skippedRecords: SkippedTranscriptRecord[]
 }
 
 export type SessionParseCacheEntry = {
@@ -34,15 +38,38 @@ export type SessionParseCacheEntry = {
 }
 
 const cache = new Map<string, SessionParseCacheEntry>()
+let revision = 0
+let onChange: (() => void) | null = null
+
+export function sessionParseCacheRevision(): number {
+  return revision
+}
+
+export function observeSessionParseCacheChanges(observer: (() => void) | null): void {
+  onChange = observer
+}
+
+function notifyChange(): void {
+  revision++
+  try {
+    onChange?.()
+  } catch (error) {
+    console.debug('[ai-vault] session parse cache checkpoint scheduling failed', error)
+  }
+}
 
 export function resetSessionParseCacheForTests(): void {
   cache.clear()
+  revision = 0
+  onChange = null
 }
 
 // Drops one entry after its file is deleted. Cleanliness, not correctness:
 // discovery walks disk first, so a trashed file is never rediscovered anyway.
 export function invalidateSessionParseCacheEntry(path: string): void {
-  cache.delete(path)
+  if (cache.delete(path)) {
+    notifyChange()
+  }
 }
 
 // Persisted subset of a cache entry: the non-serializable `resume` parser
@@ -73,17 +100,26 @@ export function snapshotSessionParseCacheForPersistence(): [
 export function seedSessionParseCache(
   entries: Iterable<[string, PersistedSessionParseCacheEntry]>
 ): void {
-  const list = [...entries]
-  // Snapshot order is oldest→newest (LRU); an over-cap list keeps the newest
-  // tail rather than seeding the oldest entries and dropping the tail.
-  for (const [path, entry] of list.slice(Math.max(0, list.length - MAX_CACHE_ENTRIES))) {
-    if (cache.size >= MAX_CACHE_ENTRIES) {
-      return
-    }
-    // In-process entries are always fresher than persisted ones; never clobber.
+  const newest = new Map<string, PersistedSessionParseCacheEntry>()
+  for (const [path, entry] of entries) {
     if (cache.has(path)) {
       continue
     }
+    newest.delete(path)
+    newest.set(path, entry)
+    if (newest.size > MAX_CACHE_ENTRIES) {
+      const oldest = newest.keys().next()
+      if (!oldest.done) {
+        newest.delete(oldest.value)
+      }
+    }
+  }
+  const available = MAX_CACHE_ENTRIES - cache.size
+  if (available <= 0) {
+    return
+  }
+  // In-process entries win; among persisted duplicates the newest row wins.
+  for (const [path, entry] of [...newest].slice(-available)) {
     cache.set(path, {
       mtimeMs: entry.mtimeMs,
       sizeBytes: entry.sizeBytes,
@@ -102,6 +138,14 @@ export function getSessionParseCacheEntry(path: string): SessionParseCacheEntry 
 }
 
 export function storeSessionParseCacheEntry(path: string, entry: SessionParseCacheEntry): void {
+  const previous = cache.get(path)
+  const changed =
+    previous === undefined ||
+    previous.mtimeMs !== entry.mtimeMs ||
+    previous.sizeBytes !== entry.sizeBytes ||
+    previous.platform !== entry.platform ||
+    previous.session !== entry.session ||
+    !sameSidecar(previous.sidecar, entry.sidecar)
   cache.delete(path)
   cache.set(path, entry)
   if (cache.size > MAX_CACHE_ENTRIES) {
@@ -110,4 +154,21 @@ export function storeSessionParseCacheEntry(path: string, entry: SessionParseCac
       cache.delete(oldest.value)
     }
   }
+  if (changed) {
+    notifyChange()
+  }
+}
+
+function sameSidecar(
+  left: SessionSidecarObservation | undefined,
+  right: SessionSidecarObservation | undefined
+): boolean {
+  return (
+    left === right ||
+    (typeof left === 'object' &&
+      typeof right === 'object' &&
+      left.path === right.path &&
+      left.mtimeMs === right.mtimeMs &&
+      left.sizeBytes === right.sizeBytes)
+  )
 }

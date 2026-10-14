@@ -20,18 +20,14 @@ vi.mock('../git/runner', async (importOriginal) => ({
   ghExecFileAsync: ghExecFileAsyncMock
 }))
 
-vi.mock('../providers/ssh-git-dispatch', () => ({
-  getSshGitProvider: () => null
-}))
-
 vi.mock('./local-git-config-signature', () => ({
   readLocalGitConfigSignature: readLocalGitConfigSignatureMock
 }))
 
 import { _resetRemoteNameListingCache } from '../git/remote-name-listing'
 import { getOwnerRepoForRemote, _resetOwnerRepoCache } from './github-repository-identity'
-import { getOwnerRepo, getIssueOwnerRepo } from './github-owner-repo-selection'
-import { getRepoUpstream } from './client'
+import { getOwnerRepo } from './github-owner-repo-selection'
+import { getRepoUpstream } from './client/fetch/repo-slug-upstream'
 
 const FORK_PATH = '/tmp/fork-checkout'
 const NON_FORK_PATH = '/tmp/plain-checkout'
@@ -82,13 +78,6 @@ describe('issue #7331: fork PR owner/repo resolution', () => {
     // PRs live on the parent, so PR lookups must target it (matches
     // getIssueOwnerRepo).
     expect(prRepo).toEqual({ owner: 'stablyai', repo: 'orca' })
-  })
-
-  it('getOwnerRepo and getIssueOwnerRepo agree on a fork checkout', async () => {
-    const prRepo = await getOwnerRepo(FORK_PATH)
-    const issueRepo = await getIssueOwnerRepo(FORK_PATH)
-
-    expect(prRepo).toEqual(issueRepo)
   })
 
   it('getOwnerRepo falls back to origin when there is no upstream remote', async () => {

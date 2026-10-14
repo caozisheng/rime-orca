@@ -1,18 +1,14 @@
+import { realpath } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
+import { detectAgentCommandsOnHost } from '../../preflight/agent-detection'
 import {
   FLOATING_TERMINAL_WORKTREE_ID,
   OrcaRuntimeService,
   SETUP_AGENT_SEQUENCE_STARTUP_COMMAND_ENV,
-  electronMocks,
-  homedir,
-  ipcMain,
   join,
-  markCodexProjectTrustedMock,
   mkdtemp,
   randomUUID,
-  registerSshGitProvider,
-  tmpdir,
-  unregisterSshGitProvider
+  tmpdir
 } from '../orca-runtime-test-mocks.spec'
 import {
   TEST_FOLDER_PROJECT_GROUP_ID,
@@ -25,10 +21,34 @@ import {
   expectStablePaneKeyEnv,
   makeFolderProjectGroup,
   makeFolderWorkspace,
+  makeWorktreeMeta,
   store
 } from '../orca-runtime-test-fixtures.spec'
 
 describe('OrcaRuntimeService', () => {
+  it.each(['qoder', 'qodercli'] as const)(
+    'spawns the available Qoder command for a captured same-session resume: %s',
+    async (command) => {
+      vi.mocked(detectAgentCommandsOnHost).mockResolvedValueOnce(new Set([command]))
+      const spawn = vi.fn().mockResolvedValue({ id: 'pty-qoder-resume' })
+      const runtime = new OrcaRuntimeService(store)
+      runtime.setPtyController({
+        spawn,
+        write: () => true,
+        kill: () => true,
+        getForegroundProcess: async () => null
+      })
+      await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`, {
+        launchAgent: 'qoder',
+        command: "qodercli --resume 'existing-qoder-session'",
+        launchConfig: { agentCommand: 'qodercli', agentArgs: '', agentEnv: {} }
+      })
+      expect(spawn).toHaveBeenCalledWith(
+        expect.objectContaining({ command: `${command} --resume 'existing-qoder-session'` })
+      )
+    }
+  )
+
   it('does not use the local Windows shell setting for remote Windows bare agent creates', async () => {
     const remoteRepo = {
       id: TEST_REPO_ID,
@@ -42,6 +62,10 @@ describe('OrcaRuntimeService', () => {
       ...store,
       getRepos: () => [remoteRepo],
       getRepo: (id: string) => (id === TEST_REPO_ID ? remoteRepo : undefined),
+      // Why: this process serves no SSH git, so the SSH repo resolves from its stored rows.
+      getAllWorktreeMeta: () => ({
+        [`${TEST_REPO_ID}::C:/remote/repo`]: makeWorktreeMeta()
+      }),
       getSettings: () => ({
         ...store.getSettings(),
         disabledTuiAgents: [],
@@ -51,20 +75,7 @@ describe('OrcaRuntimeService', () => {
         agentDefaultEnv: {}
       })
     }
-    const provider = {
-      exec: vi.fn().mockResolvedValue({ stdout: '', stderr: '' }),
-      listWorktrees: vi.fn().mockResolvedValue([
-        {
-          path: 'C:/remote/repo',
-          head: 'abc',
-          branch: 'main',
-          isBare: false,
-          isMainWorktree: true
-        }
-      ])
-    }
     const spawn = vi.fn().mockResolvedValue({ id: 'pty-remote-windows-bare' })
-    registerSshGitProvider('ssh-1', provider as never)
     const runtime = new OrcaRuntimeService(remoteStore as never)
     runtime.setPtyController({
       spawn,
@@ -73,21 +84,17 @@ describe('OrcaRuntimeService', () => {
       getForegroundProcess: async () => null
     })
 
-    try {
-      const terminal = await runtime.createTerminal('path:C:/remote/repo', {
-        command: 'claude',
-        title: 'worker'
-      })
+    const terminal = await runtime.createTerminal('path:C:/remote/repo', {
+      command: 'claude',
+      title: 'worker'
+    })
 
-      const spawnCall = spawn.mock.calls[0]?.[0] as { command?: string } | undefined
-      expect(spawnCall?.command).toBe("claude '--dangerously-skip-permissions'")
-      expect(terminal).toMatchObject({
-        executionHostId: 'ssh:ssh-1',
-        hostPlatform: 'linux'
-      })
-    } finally {
-      unregisterSshGitProvider('ssh-1')
-    }
+    const spawnCall = spawn.mock.calls[0]?.[0] as { command?: string } | undefined
+    expect(spawnCall?.command).toBe("claude '--dangerously-skip-permissions'")
+    expect(terminal).toMatchObject({
+      executionHostId: 'ssh:ssh-1',
+      hostPlatform: 'linux'
+    })
   })
 
   it('matches canonical bare agent commands when a command override is configured', async () => {
@@ -180,72 +187,6 @@ describe('OrcaRuntimeService', () => {
       | undefined
     expect(spawnCall?.command).toBe('codex')
     expect(spawnCall?.env?.ORCA_AGENT_LAUNCH_TOKEN).toBeUndefined()
-  })
-
-  it('sends Settings agent defaults through renderer-backed bare agent terminal creates', async () => {
-    const runtimeStore = {
-      ...store,
-      getSettings: () => ({
-        ...store.getSettings(),
-        disabledTuiAgents: [],
-        agentCmdOverrides: {},
-        agentDefaultArgs: { codex: '--dangerously-bypass-approvals-and-sandbox' },
-        agentDefaultEnv: { codex: { CODEX_PROFILE: 'captured' } }
-      })
-    }
-    const runtime = new OrcaRuntimeService(runtimeStore)
-
-    const webContents = { send: vi.fn() }
-    webContents.send.mockImplementation((_channel: string, payload: { requestId: string }) => {
-      runtime.syncWindowGraph(1, {
-        tabs: [],
-        leaves: [
-          {
-            tabId: 'tab-renderer',
-            worktreeId: TEST_WORKTREE_ID,
-            leafId: 'pane:1',
-            paneRuntimeId: 1,
-            ptyId: 'pty-renderer',
-            paneTitle: null
-          }
-        ]
-      })
-      ipcMain.emit(
-        'terminal:tabCreateReply',
-        { sender: webContents },
-        { requestId: payload.requestId, tabId: 'tab-renderer', title: 'Codex' }
-      )
-    })
-    runtime.attachWindow(1)
-    runtime.syncWindowGraph(1, { tabs: [], leaves: [] })
-    electronMocks.BrowserWindow.fromId.mockReturnValue({
-      isDestroyed: () => false,
-      webContents
-    })
-
-    await runtime.createTerminal(`path:${TEST_WORKTREE_PATH}`, {
-      command: 'codex',
-      rendererBacked: true
-    })
-
-    expect(webContents.send).toHaveBeenCalledWith(
-      'terminal:requestTabCreate',
-      expect.objectContaining({
-        worktreeId: TEST_WORKTREE_ID,
-        command: "codex '--dangerously-bypass-approvals-and-sandbox'",
-        env: { CODEX_PROFILE: 'captured' },
-        launchAgent: 'codex',
-        launchConfig: {
-          agentCommand: "codex '--dangerously-bypass-approvals-and-sandbox'",
-          agentArgs: '--dangerously-bypass-approvals-and-sandbox',
-          agentEnv: { CODEX_PROFILE: 'captured' }
-        }
-      })
-    )
-    expect(markCodexProjectTrustedMock).toHaveBeenCalledWith(TEST_WORKTREE_PATH)
-    expect(markCodexProjectTrustedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      webContents.send.mock.invocationCallOrder[0]!
-    )
   })
 
   it('injects runtime hook receiver env into terminal sessions', async () => {
@@ -347,7 +288,12 @@ describe('OrcaRuntimeService', () => {
     }
   ])('creates background terminal sessions for a $label', async ({ selector }) => {
     const spawn = vi.fn().mockResolvedValue({ id: 'pty-floating' })
-    const runtime = new OrcaRuntimeService(store)
+    const floatingDir = await realpath(await mkdtemp(join(tmpdir(), 'orca-floating-')))
+    const runtimeStore: typeof store = {
+      ...store,
+      getSettings: () => ({ ...store.getSettings(), floatingTerminalCwd: floatingDir })
+    }
+    const runtime = new OrcaRuntimeService(runtimeStore)
     runtime.setPtyController({
       spawn,
       write: () => true,
@@ -374,8 +320,9 @@ describe('OrcaRuntimeService', () => {
           worktreeId?: string
         }
       | undefined
+    // Why the configured folder: host-launched floating terminals start where the panel's own do.
     expect(spawnCall).toMatchObject({
-      cwd: homedir(),
+      cwd: floatingDir,
       connectionId: null,
       worktreeId: FLOATING_TERMINAL_WORKTREE_ID
     })
